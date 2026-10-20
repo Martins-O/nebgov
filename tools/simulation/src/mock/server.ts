@@ -12,12 +12,13 @@
  */
 import { Address, nativeToScVal, scValToNative, SorobanDataBuilder, xdr } from "@stellar/stellar-sdk";
 import { LedgerClock } from "../ledger";
-import { cloneStore, CoSponsorshipDraftRecord, MockLedgerStore, ProposalRecord } from "./store";
+import { cloneStore, CoSponsorshipDraftRecord, MockLedgerStore, OptimisticProposalRecord, ProposalRecord } from "./store";
 import { MockContractError } from "./errors";
 import { governorExecutor } from "./governor-executor";
 import { timelockExecutor } from "./timelock-executor";
 import { tokenVotesExecutor } from "./token-votes-executor";
 import { coSponsorshipExecutor } from "./co-sponsorship-executor";
+import { optimisticGovernorExecutor } from "./optimistic-governor-executor";
 import {
   encAddress,
   encBool,
@@ -146,11 +147,58 @@ function encodeCoSponsorshipDraft(draft: CoSponsorshipDraftRecord): xdr.ScVal {
   });
 }
 
+function encodeOptimisticProposal(proposal: OptimisticProposalRecord): xdr.ScVal {
+  return encMap({
+    id: encU64(proposal.id),
+    proposer: encAddress(proposal.proposer),
+    target: encAddress(proposal.target),
+    fn_name: encSymbol(proposal.fnName),
+    calldata: encBytes(proposal.calldata),
+    description_hash: encBytes(proposal.descriptionHash),
+    created_ledger: encU32(proposal.createdLedger),
+    challenge_end_ledger: encU32(proposal.challengeEndLedger),
+    objection_votes: encI128(proposal.objectionVotes),
+    state: encEnum(proposal.state),
+  });
+}
+
 function encodeReturn(
-  contract: "governor" | "timelock" | "votes" | "coSponsorship",
+  contract: "governor" | "timelock" | "votes" | "coSponsorship" | "optimisticGovernor",
   fnName: string,
   value: unknown,
 ): xdr.ScVal {
+  if (contract === "optimisticGovernor") {
+    switch (fnName) {
+      case "propose":
+        return encU64(value as bigint);
+      case "object":
+      case "finalize":
+      case "execute":
+      case "cancel":
+      case "update_config":
+        return encVoid();
+      case "get_proposal":
+        return encodeOptimisticProposal(value as OptimisticProposalRecord);
+      case "get_config": {
+        const config = value as {
+          votesToken: string;
+          challengeWindowLedgers: number;
+          objectionThresholdBps: number;
+          proposerBondAmount: bigint;
+          proposerBondToken: string;
+        };
+        return encMap({
+          votes_token: encAddress(config.votesToken),
+          challenge_window_ledgers: encU32(config.challengeWindowLedgers),
+          objection_threshold_bps: encU32(config.objectionThresholdBps),
+          proposer_bond_amount: encI128(config.proposerBondAmount),
+          proposer_bond_token: encAddress(config.proposerBondToken),
+        });
+      }
+      default:
+        throw new Error(`MockSorobanServer: no encoder for optimisticGovernor.${fnName}`);
+    }
+  }
   if (contract === "coSponsorship") {
     switch (fnName) {
       case "create_draft":
@@ -250,11 +298,14 @@ export class MockSorobanServer {
     this.results.clear();
   }
 
-  private resolveContract(address: string): "governor" | "timelock" | "votes" | "coSponsorship" {
+  private resolveContract(
+    address: string,
+  ): "governor" | "timelock" | "votes" | "coSponsorship" | "optimisticGovernor" {
     if (address === this.store.addresses.governor) return "governor";
     if (address === this.store.addresses.timelock) return "timelock";
     if (address === this.store.addresses.votes) return "votes";
     if (address === this.store.addresses.coSponsorship) return "coSponsorship";
+    if (address === this.store.addresses.optimisticGovernor) return "optimisticGovernor";
     throw new Error(`MockSorobanServer: unknown contract address ${address}`);
   }
 
@@ -273,6 +324,13 @@ export class MockSorobanServer {
     if (contract === "coSponsorship") {
       const handler = (coSponsorshipExecutor as Record<string, (...a: unknown[]) => unknown>)[invocation.functionName];
       if (!handler) throw new Error(`MockSorobanServer: unknown co-sponsorship function ${invocation.functionName}`);
+      return handler(store, this.clock, invocation.caller, invocation.args);
+    }
+    if (contract === "optimisticGovernor") {
+      const handler = (optimisticGovernorExecutor as Record<string, (...a: unknown[]) => unknown>)[invocation.functionName];
+      if (!handler) {
+        throw new Error(`MockSorobanServer: unknown optimistic-governor function ${invocation.functionName}`);
+      }
       return handler(store, this.clock, invocation.caller, invocation.args);
     }
     const handler = (tokenVotesExecutor as Record<string, (...a: unknown[]) => unknown>)[invocation.functionName];

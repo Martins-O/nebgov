@@ -93,6 +93,40 @@ export interface ContractAddresses {
   timelock: string;
   votes: string;
   coSponsorship: string;
+  optimisticGovernor: string;
+}
+
+export type OptimisticProposalLifecycle =
+  | "ChallengeWindow"
+  | "Objected"
+  | "Passed"
+  | "Executed"
+  | "Cancelled";
+
+export interface OptimisticProposalRecord {
+  id: bigint;
+  proposer: string;
+  target: string;
+  fnName: string;
+  calldata: Uint8Array;
+  descriptionHash: Uint8Array;
+  createdLedger: number;
+  challengeEndLedger: number;
+  objectionVotes: bigint;
+  state: OptimisticProposalLifecycle;
+}
+
+export interface OptimisticGovernorState {
+  admin: string;
+  votesToken: string;
+  challengeWindowLedgers: number;
+  objectionThresholdBps: number;
+  proposerBondAmount: bigint;
+  proposerBondToken: string;
+  proposals: Map<bigint, OptimisticProposalRecord>;
+  proposalCount: bigint;
+  /** `${proposalId}:${address}` entries for objectors who already objected. */
+  objectorVoted: Set<string>;
 }
 
 export interface CoSponsorshipDraftRecord {
@@ -124,6 +158,7 @@ export interface MockLedgerStore {
   timelock: TimelockState;
   votes: TokenVotesState;
   coSponsorship: CoSponsorshipState;
+  optimisticGovernor: OptimisticGovernorState;
 }
 
 export function cloneStore(store: MockLedgerStore): MockLedgerStore {

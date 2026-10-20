@@ -26,6 +26,8 @@ export { RateLimitScenario } from "./scenarios/rate-limit";
 export type { RateLimitScenarioConfig } from "./scenarios/rate-limit";
 export { CoSponsorshipDraftScenario } from "./scenarios/co_sponsorship_draft";
 export type { CoSponsorshipDraftScenarioConfig } from "./scenarios/co_sponsorship_draft";
+export { OptimisticChallengeScenario } from "./scenarios/optimistic_challenge";
+export type { OptimisticChallengeScenarioConfig } from "./scenarios/optimistic_challenge";
 
 export {
   assertProposalState,

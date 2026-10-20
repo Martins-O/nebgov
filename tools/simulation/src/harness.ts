@@ -5,6 +5,7 @@ import {
   GovernorClient,
   GovernorConfig,
   Network,
+  OptimisticGovernorClient,
   TimelockClient,
   VoteType,
   VotesClient,
@@ -47,6 +48,14 @@ export interface GovernorSimulationSettings {
   maxCalldataSize?: number;
   /** Address authorized to pause/unpause the contract. Defaults to the guardian. */
   pauser?: string;
+  /** Optimistic-governor challenge window, in ledgers. Defaults to 17_280 (~1 day). */
+  optimisticChallengeWindowLedgers?: number;
+  /** Objection threshold in basis points of past total supply. Defaults to 1000 (10%). */
+  optimisticObjectionThresholdBps?: number;
+  /** Optimistic proposer bond; the mock models only a disabled (0) bond. Defaults to 0. */
+  optimisticProposerBondAmount?: bigint;
+  /** Optimistic proposer bond token address. Defaults to the votes contract. */
+  optimisticProposerBondToken?: string;
 }
 
 export interface SimulationConfig {
@@ -69,6 +78,7 @@ export interface DeployedContracts {
   timelock: string;
   votes: string;
   coSponsorship: string;
+  optimisticGovernor: string;
 }
 
 interface ClockSnapshot {
@@ -87,6 +97,8 @@ const DEFAULT_COOLDOWN = 100;
 const DEFAULT_MAX_PER_PERIOD = 5;
 const DEFAULT_PERIOD_DURATION = 10_000;
 const DEFAULT_MAX_CALLDATA_SIZE = 10_000;
+const DEFAULT_OPTIMISTIC_CHALLENGE_WINDOW = 17_280; // ~1 day at 5s/ledger.
+const DEFAULT_OPTIMISTIC_OBJECTION_THRESHOLD_BPS = 1000; // 10% of past total supply.
 const DEFAULT_GUARDIAN = Keypair.fromRawEd25519Seed(
   createHash("sha256").update("nebgov-simulation-actor:default-guardian").digest(),
 ).publicKey();
@@ -112,6 +124,7 @@ export class SimulationHarness {
   coSponsorshipClient!: CoSponsorshipClient;
   timelockClient!: TimelockClient;
   votesClient!: VotesClient;
+  optimisticGovernorClient!: OptimisticGovernorClient;
 
   private store!: MockLedgerStore;
   private mockServer?: MockSorobanServer;
@@ -183,6 +196,19 @@ export class SimulationHarness {
         drafts: new Map(),
         draftCount: 0n,
       },
+      optimisticGovernor: {
+        admin: this.config.settings.guardian ?? DEFAULT_GUARDIAN,
+        votesToken: this.addresses.votes,
+        challengeWindowLedgers:
+          this.config.settings.optimisticChallengeWindowLedgers ?? DEFAULT_OPTIMISTIC_CHALLENGE_WINDOW,
+        objectionThresholdBps:
+          this.config.settings.optimisticObjectionThresholdBps ?? DEFAULT_OPTIMISTIC_OBJECTION_THRESHOLD_BPS,
+        proposerBondAmount: this.config.settings.optimisticProposerBondAmount ?? 0n,
+        proposerBondToken: this.config.settings.optimisticProposerBondToken ?? this.addresses.votes,
+        proposals: new Map(),
+        proposalCount: 0n,
+        objectorVoted: new Set(),
+      },
     };
 
     seedBalances(store.votes, this.config.tokenBalances);
@@ -200,6 +226,7 @@ export class SimulationHarness {
       timelock: contractAddress(2),
       votes: contractAddress(3),
       coSponsorship: contractAddress(4),
+      optimisticGovernor: contractAddress(5),
     };
     this.store = this.buildStore();
 
@@ -223,6 +250,13 @@ export class SimulationHarness {
     this.coSponsorshipClient = new CoSponsorshipClient(clientConfig);
     this.timelockClient = new TimelockClient(clientConfig);
     this.votesClient = new VotesClient(clientConfig);
+    this.optimisticGovernorClient = new OptimisticGovernorClient({
+      optimisticGovernorAddress: this.addresses.optimisticGovernor,
+      network: clientConfig.network,
+      rpcUrl: clientConfig.rpcUrl,
+      simulationAccount: clientConfig.simulationAccount,
+      maxAttempts: 1,
+    });
 
     return this.addresses;
   }

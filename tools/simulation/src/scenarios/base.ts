@@ -1,4 +1,4 @@
-import { ProposalState, VoteSupport } from "@nebgov/sdk";
+import { OptimisticProposalState, ProposalState, VoteSupport } from "@nebgov/sdk";
 import { Actor } from "../actors";
 import { SimulationHarness } from "../harness";
 
@@ -16,6 +16,8 @@ export interface SimulationResult {
   success: boolean;
   proposalId?: bigint;
   finalState?: ProposalState;
+  /** Terminal state on the optimistic-governor track; unset for standard-governor scenarios. */
+  optimisticState?: OptimisticProposalState;
   ledgersElapsed: number;
   errors: string[];
 }

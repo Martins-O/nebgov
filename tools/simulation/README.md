@@ -37,7 +37,9 @@ tools/simulation/
 │   │   ├── defeat.ts       # Proposal fails quorum/majority
 │   │   ├── veto.ts         # Guardian veto of queued proposal
 │   │   ├── rate-limit.ts   # Proposer rate-limiting enforcement
-│   │   └── expiry.ts       # Proposal expiration logic
+│   │   ├── expiry.ts       # Proposal expiration logic
+│   │   ├── co_sponsorship_draft.ts # Draft pooling into a governor proposal
+│   │   └── optimistic_challenge.ts # Optimistic propose→challenge window→execute
 │   ├── harness.ts          # SimulationHarness: contract management & lifecycle
 │   ├── actors.ts           # Mock actors with keypairs
 │   ├── ledger.ts           # Ledger clock simulation
@@ -46,6 +48,7 @@ tools/simulation/
 │   │   ├── governor-executor.ts
 │   │   ├── timelock-executor.ts
 │   │   ├── token-votes-executor.ts
+│   │   ├── optimistic-governor-executor.ts
 │   │   └── ...
 │   └── assertions/         # Helper assertions
 └── tests/
@@ -54,6 +57,8 @@ tools/simulation/
     ├── veto.sim.ts         # Guardian veto scenarios
     ├── rate-limit.sim.ts   # Proposer cooldown enforcement
     ├── expiry.sim.ts       # Expiration edge cases
+    ├── co_sponsorship_draft.sim.ts # Co-sponsorship draft pooling
+    ├── optimistic_challenge.sim.ts # Optimistic challenge-window lifecycle
     └── helpers.ts          # Test setup helpers
 ```
 
@@ -135,6 +140,7 @@ interface SimulationResult {
   success: boolean;              // Did the scenario complete successfully?
   proposalId?: bigint;           // Created proposal ID (if applicable)
   finalState?: ProposalState;    // Proposal's terminal state
+  optimisticState?: OptimisticProposalState; // Terminal state on the optimistic track
   ledgersElapsed: number;        // Ledgers advanced during the scenario
   errors: string[];              // Captured errors (e.g., contract reverts)
 }
