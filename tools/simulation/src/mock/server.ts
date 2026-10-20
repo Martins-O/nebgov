@@ -12,13 +12,14 @@
  */
 import { Address, nativeToScVal, scValToNative, SorobanDataBuilder, xdr } from "@stellar/stellar-sdk";
 import { LedgerClock } from "../ledger";
-import { cloneStore, BudgetStreamRecord, CoSponsorshipDraftRecord, MockLedgerStore, OptimisticProposalRecord, ProposalRecord, StreamSpendRecord } from "./store";
+import { cloneStore, BudgetStreamRecord, CoSponsorshipDraftRecord, ConvictionProposalRecord, ConvictionStakeRecord, MockLedgerStore, OptimisticProposalRecord, ProposalRecord, StreamSpendRecord } from "./store";
 import { MockContractError } from "./errors";
 import { governorExecutor } from "./governor-executor";
 import { timelockExecutor } from "./timelock-executor";
 import { tokenVotesExecutor } from "./token-votes-executor";
 import { coSponsorshipExecutor } from "./co-sponsorship-executor";
 import { optimisticGovernorExecutor } from "./optimistic-governor-executor";
+import { convictionVotingExecutor } from "./conviction-voting-executor";
 import { treasuryExecutor, StreamBudgetReportRecord, TreasuryBudgetSummaryRecord } from "./treasury-executor";
 import {
   encAddress,
@@ -163,6 +164,30 @@ function encodeOptimisticProposal(proposal: OptimisticProposalRecord): xdr.ScVal
   });
 }
 
+function encodeConvictionProposal(proposal: ConvictionProposalRecord): xdr.ScVal {
+  return encMap({
+    id: encU64(proposal.id),
+    proposer: encAddress(proposal.proposer),
+    target: encAddress(proposal.target),
+    fn_name: encSymbol(proposal.fnName),
+    calldata: encBytes(proposal.calldata),
+    requested_amount: encI128(proposal.requestedAmount),
+    created_ledger: encU32(proposal.createdLedger),
+    conviction: encI128(proposal.conviction),
+    last_updated_ledger: encU32(proposal.lastUpdatedLedger),
+    executed: encBool(proposal.executed),
+    cancelled: encBool(proposal.cancelled),
+  });
+}
+
+function encodeConvictionStake(stake: ConvictionStakeRecord): xdr.ScVal {
+  return encMap({
+    staker: encAddress(stake.staker),
+    proposal_id: encU64(stake.proposalId),
+    amount: encI128(stake.amount),
+  });
+}
+
 function encodeBudgetStream(stream: BudgetStreamRecord): xdr.ScVal {
   return encMap({
     id: encU64(stream.id),
@@ -227,10 +252,28 @@ function encodeTreasuryBudgetSummary(summary: TreasuryBudgetSummaryRecord): xdr.
 }
 
 function encodeReturn(
-  contract: "governor" | "timelock" | "votes" | "coSponsorship" | "optimisticGovernor" | "treasury",
+  contract: "governor" | "timelock" | "votes" | "coSponsorship" | "optimisticGovernor" | "treasury" | "convictionVoting",
   fnName: string,
   value: unknown,
 ): xdr.ScVal {
+  if (contract === "convictionVoting") {
+    switch (fnName) {
+      case "create_proposal":
+        return encU64(value as bigint);
+      case "stake":
+      case "withdraw_stake":
+        return encVoid();
+      case "checkpoint_conviction":
+      case "get_required_threshold":
+        return encI128(value as bigint);
+      case "get_proposal":
+        return encodeConvictionProposal(value as ConvictionProposalRecord);
+      case "get_stakes":
+        return encVec((value as ConvictionStakeRecord[]).map(encodeConvictionStake));
+      default:
+        throw new Error(`MockSorobanServer: no encoder for convictionVoting.${fnName}`);
+    }
+  }
   if (contract === "treasury") {
     switch (fnName) {
       case "create_stream":
@@ -387,13 +430,14 @@ export class MockSorobanServer {
 
   private resolveContract(
     address: string,
-  ): "governor" | "timelock" | "votes" | "coSponsorship" | "optimisticGovernor" | "treasury" {
+  ): "governor" | "timelock" | "votes" | "coSponsorship" | "optimisticGovernor" | "treasury" | "convictionVoting" {
     if (address === this.store.addresses.governor) return "governor";
     if (address === this.store.addresses.timelock) return "timelock";
     if (address === this.store.addresses.votes) return "votes";
     if (address === this.store.addresses.coSponsorship) return "coSponsorship";
     if (address === this.store.addresses.optimisticGovernor) return "optimisticGovernor";
     if (address === this.store.addresses.treasury) return "treasury";
+    if (address === this.store.addresses.convictionVoting) return "convictionVoting";
     throw new Error(`MockSorobanServer: unknown contract address ${address}`);
   }
 
@@ -425,6 +469,13 @@ export class MockSorobanServer {
       const handler = (treasuryExecutor as Record<string, (...a: unknown[]) => unknown>)[invocation.functionName];
       if (!handler) {
         throw new Error(`MockSorobanServer: unknown treasury function ${invocation.functionName}`);
+      }
+      return handler(store, this.clock, invocation.caller, invocation.args);
+    }
+    if (contract === "convictionVoting") {
+      const handler = (convictionVotingExecutor as Record<string, (...a: unknown[]) => unknown>)[invocation.functionName];
+      if (!handler) {
+        throw new Error(`MockSorobanServer: unknown conviction-voting function ${invocation.functionName}`);
       }
       return handler(store, this.clock, invocation.caller, invocation.args);
     }

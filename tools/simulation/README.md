@@ -40,7 +40,8 @@ tools/simulation/
 │   │   ├── expiry.ts       # Proposal expiration logic
 │   │   ├── co_sponsorship_draft.ts # Draft pooling into a governor proposal
 │   │   ├── optimistic_challenge.ts # Optimistic propose→challenge window→execute
-│   │   └── treasury_streams.ts # Treasury stream create→spend→top-up→drain
+│   │   ├── treasury_streams.ts # Treasury stream create→spend→top-up→drain
+│   │   └── conviction_lock.ts # Conviction lock→accrue→self-execute
 │   ├── harness.ts          # SimulationHarness: contract management & lifecycle
 │   ├── actors.ts           # Mock actors with keypairs
 │   ├── ledger.ts           # Ledger clock simulation
@@ -50,6 +51,7 @@ tools/simulation/
 │   │   ├── timelock-executor.ts
 │   │   ├── token-votes-executor.ts
 │   │   ├── optimistic-governor-executor.ts
+│   │   ├── conviction-voting-executor.ts
 │   │   └── ...
 │   └── assertions/         # Helper assertions
 └── tests/
@@ -61,6 +63,7 @@ tools/simulation/
     ├── co_sponsorship_draft.sim.ts # Co-sponsorship draft pooling
     ├── optimistic_challenge.sim.ts # Optimistic challenge-window lifecycle
     ├── treasury_streams.sim.ts # Treasury budget-stream lifecycle
+    ├── conviction_lock.sim.ts # Conviction lock/accrue/self-execute
     └── helpers.ts          # Test setup helpers
 ```
 
@@ -311,6 +314,51 @@ the recipient on the `token-votes` balance ledger, so tests that run this
 scenario must seed `config.treasuryBalance` with more than the amount the
 stream will move (see `tests/treasury_streams.sim.ts`).
 
+## Worked Example: ConvictionLockScenario
+
+The `ConvictionLockScenario` drives one conviction-voting proposal end to end —
+locking is non-custodial, so no tokens move; supporters commit voting power
+with `stake()` and conviction accrues under the contract's time-weighted
+multiplier until `checkpoint_conviction` self-executes the action:
+
+1. **Create**: the proposer opens a proposal targeting `governor.noop`
+2. **Lock**: a supporter stakes voting power (a lock above their live voting
+   power is rejected with `InsufficientVotingPower`)
+3. **Partial accrual**: after 10 ledgers conviction matches the exact integer
+   accrual `projectConviction` predicts, still below the dynamic threshold
+4. **Expiry**: once the decay window exhausts, conviction sits at its
+   steady-state cap `totalStaked * weightBps / (BPS - decayBps)` — one lock
+   alone cannot clear the threshold
+5. **Second lock**: another supporter joins; the combined locks approach, then
+   on the next checkpoint cross, the threshold
+6. **Self-execution**: the crossing checkpoint sets `executed` and records the
+   target invocation exactly once in `store.convictionVoting.executions`
+7. **Closed**: further locks are rejected with `ProposalClosed`, re-checkpoints
+   are no-ops, and withdrawing finalizes the lock (`StakeNotFound` on a second
+   withdraw)
+
+Every step asserts the proposal's conviction, `lastUpdatedLedger`, and
+`executed` flag against the shared `powBps`/`projectConviction` helpers the
+executor uses.
+
+```typescript
+const result = await harness.run(ConvictionLockScenario, {
+  proposer: setup.actors.proposers[0],
+  locker: setup.actors.voters[0],
+  coSupporter: setup.actors.voters[1],
+});
+
+expect(result.success).toBe(true);
+expect(result.expiryConviction).toBe(10_000n);
+expect(result.finalConviction).toBe(16_514n);
+expect(result.executions).toHaveLength(1);
+```
+
+Tests that run this scenario must seed `config.conviction` with a
+`minThresholdConviction` between one lock's steady-state cap and the two-lock
+cap (see `tests/conviction_lock.sim.ts`), so the expiry checkpoint stays open
+and only the second lock can execute.
+
 ## Error Handling
 
 Scenarios capture contract errors in the `errors` array. Always assert the specific error code, not just the array length:
@@ -431,6 +479,7 @@ console.log(power); // 1000
 | `RateLimitScenario` | Proposer rate-limiting enforcement | `rate-limit.sim.ts` |
 | `ExpiryScenario` | Proposal expiration after grace period | `expiry.sim.ts` |
 | `TreasuryStreamsScenario` | Stream create→spend→top-up→drain | `treasury_streams.sim.ts` |
+| `ConvictionLockScenario` | Lock→accrue conviction→threshold expiry self-executes | `conviction_lock.sim.ts` |
 
 ## Debugging
 

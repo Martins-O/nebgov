@@ -7,6 +7,7 @@ export {
 } from "./harness";
 export type {
   ContractStateSnapshot,
+  ConvictionSimulationSettings,
   DeployedContracts,
   GovernorSimulationSettings,
   SimulationConfig,
@@ -33,6 +34,12 @@ export type {
   TreasuryStreamsScenarioConfig,
   TreasuryStreamsScenarioResult,
 } from "./scenarios/treasury_streams";
+export { ConvictionLockScenario } from "./scenarios/conviction_lock";
+export type {
+  ConvictionLockScenarioConfig,
+  ConvictionLockScenarioResult,
+} from "./scenarios/conviction_lock";
+export type { ConvictionExecutionRecord } from "./mock/store";
 
 export {
   assertProposalState,

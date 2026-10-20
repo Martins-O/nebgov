@@ -95,6 +95,7 @@ export interface ContractAddresses {
   coSponsorship: string;
   optimisticGovernor: string;
   treasury: string;
+  convictionVoting: string;
 }
 
 export type OptimisticProposalLifecycle =
@@ -197,6 +198,64 @@ export interface TreasuryState {
   totalSpentByToken: Map<string, bigint>;
 }
 
+/** A continuously-supported proposal on the conviction-voting track. */
+export interface ConvictionProposalRecord {
+  id: bigint;
+  proposer: string;
+  target: string;
+  fnName: string;
+  calldata: Uint8Array;
+  requestedAmount: bigint;
+  createdLedger: number;
+  conviction: bigint;
+  lastUpdatedLedger: number;
+  executed: boolean;
+  cancelled: boolean;
+}
+
+/** One supporter's voting-power commitment on a conviction proposal. */
+export interface ConvictionStakeRecord {
+  staker: string;
+  proposalId: bigint;
+  amount: bigint;
+}
+
+/**
+ * A conviction proposal's self-executed action. The mock records the
+ * cross-contract invocation rather than dispatching it (the same
+ * simplification the timelock executor makes for `execute()`).
+ */
+export interface ConvictionExecutionRecord {
+  proposalId: bigint;
+  target: string;
+  fnName: string;
+  calldata: Uint8Array;
+  ledger: number;
+}
+
+export interface ConvictionVotingState {
+  admin: string;
+  /** TokenVotes contract the track reads live voting power from. */
+  votesToken: string;
+  /** Per-ledger conviction decay, in bps of the retained score. */
+  decayBps: number;
+  /** Largest share of total supply a proposal may request, in bps. */
+  maxRatioBps: number;
+  /** Conviction floor for a proposal requesting a zero amount. */
+  minThresholdConviction: bigint;
+  /** Accrual weight applied to staked power, in bps. */
+  weightBps: number;
+  nextProposalId: bigint;
+  proposals: Map<bigint, ConvictionProposalRecord>;
+  /** proposalId -> (staker -> committed amount). */
+  stakes: Map<bigint, Map<string, bigint>>;
+  totalStaked: Map<bigint, bigint>;
+  /** staker -> proposal their voting power is currently locked onto. */
+  stakeByStaker: Map<string, bigint>;
+  /** Self-executed actions, in execution order. */
+  executions: ConvictionExecutionRecord[];
+}
+
 export interface MockLedgerStore {
   addresses: ContractAddresses;
   governor: GovernorState;
@@ -205,6 +264,7 @@ export interface MockLedgerStore {
   coSponsorship: CoSponsorshipState;
   optimisticGovernor: OptimisticGovernorState;
   treasury: TreasuryState;
+  convictionVoting: ConvictionVotingState;
 }
 
 export function cloneStore(store: MockLedgerStore): MockLedgerStore {

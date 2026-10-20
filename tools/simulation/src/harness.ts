@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { Address, BASE_FEE, Keypair, nativeToScVal, TransactionBuilder } from "@stellar/stellar-sdk";
+import { Address, BASE_FEE, Contract, Keypair, nativeToScVal, SorobanRpc, scValToNative, TransactionBuilder } from "@stellar/stellar-sdk";
 import {
   CoSponsorshipClient,
+  ConvictionVotingClient,
   GovernorClient,
   GovernorConfig,
   Network,
@@ -10,10 +11,12 @@ import {
   TreasuryClient,
   VoteType,
   VotesClient,
+  getNetworkPassphrase,
+  getRpcUrl,
 } from "@nebgov/sdk";
 import { LedgerClock } from "./ledger";
 import { Actor, ActorSet } from "./actors";
-import { GovernorSettingsState, MockLedgerStore } from "./mock/store";
+import { ConvictionExecutionRecord, GovernorSettingsState, MockLedgerStore } from "./mock/store";
 import { MockSorobanServer } from "./mock/server";
 import { setActiveMockServer } from "./mock/registry";
 import { applyDelegation, seedBalances } from "./mock/token-votes-executor";
@@ -59,6 +62,18 @@ export interface GovernorSimulationSettings {
   optimisticProposerBondToken?: string;
 }
 
+/** Parameters the conviction-voting track boots with (mirrors `contracts/conviction-voting`'s `initialize`). */
+export interface ConvictionSimulationSettings {
+  /** Per-ledger conviction decay, in bps of the retained score. Defaults to 9_000. */
+  decayBps: number;
+  /** Largest share of total supply a proposal may request, in bps. Defaults to 2_000 (20%). */
+  maxRatioBps: number;
+  /** Conviction floor for a proposal requesting a zero amount. Defaults to 100n. */
+  minThresholdConviction: bigint;
+  /** Accrual weight applied to staked power, in bps. Defaults to 10_000. */
+  weightBps: number;
+}
+
 export interface SimulationConfig {
   /** Whether to run against the built-in mock Soroban runtime or a live/testnet RPC. */
   mode: "mock" | "testnet";
@@ -81,6 +96,8 @@ export interface SimulationConfig {
    * mock models, so stream spends have funds to debit. Defaults to 0.
    */
   treasuryBalance?: bigint;
+  /** Conviction-voting track parameters. Defaults mirror the contract's own test fixture. */
+  conviction?: Partial<ConvictionSimulationSettings>;
   /** Required when mode === "testnet". */
   rpcUrl?: string;
   network?: Network;
@@ -93,6 +110,7 @@ export interface DeployedContracts {
   coSponsorship: string;
   optimisticGovernor: string;
   treasury: string;
+  convictionVoting: string;
 }
 
 interface ClockSnapshot {
@@ -113,6 +131,10 @@ const DEFAULT_PERIOD_DURATION = 10_000;
 const DEFAULT_MAX_CALLDATA_SIZE = 10_000;
 const DEFAULT_OPTIMISTIC_CHALLENGE_WINDOW = 17_280; // ~1 day at 5s/ledger.
 const DEFAULT_OPTIMISTIC_OBJECTION_THRESHOLD_BPS = 1000; // 10% of past total supply.
+const DEFAULT_CONVICTION_DECAY_BPS = 9_000;
+const DEFAULT_CONVICTION_MAX_RATIO_BPS = 2_000;
+const DEFAULT_CONVICTION_MIN_THRESHOLD = 100n;
+const DEFAULT_CONVICTION_WEIGHT_BPS = 10_000;
 const DEFAULT_GUARDIAN = Keypair.fromRawEd25519Seed(
   createHash("sha256").update("nebgov-simulation-actor:default-guardian").digest(),
 ).publicKey();
@@ -140,6 +162,10 @@ export class SimulationHarness {
   votesClient!: VotesClient;
   optimisticGovernorClient!: OptimisticGovernorClient;
   treasuryClient!: TreasuryClient;
+  convictionClient!: ConvictionVotingClient;
+
+  /** Conviction-voting track parameters the harness booted with. */
+  convictionSettings!: ConvictionSimulationSettings;
 
   private store!: MockLedgerStore;
   private mockServer?: MockSorobanServer;
@@ -234,6 +260,20 @@ export class SimulationHarness {
         totalStreamedByToken: new Map(),
         totalSpentByToken: new Map(),
       },
+      convictionVoting: {
+        admin: this.config.settings.guardian ?? DEFAULT_GUARDIAN,
+        votesToken: this.addresses.votes,
+        decayBps: this.config.conviction?.decayBps ?? DEFAULT_CONVICTION_DECAY_BPS,
+        maxRatioBps: this.config.conviction?.maxRatioBps ?? DEFAULT_CONVICTION_MAX_RATIO_BPS,
+        minThresholdConviction: this.config.conviction?.minThresholdConviction ?? DEFAULT_CONVICTION_MIN_THRESHOLD,
+        weightBps: this.config.conviction?.weightBps ?? DEFAULT_CONVICTION_WEIGHT_BPS,
+        nextProposalId: 1n,
+        proposals: new Map(),
+        stakes: new Map(),
+        totalStaked: new Map(),
+        stakeByStaker: new Map(),
+        executions: [],
+      },
     };
 
     seedBalances(store.votes, this.config.tokenBalances);
@@ -255,8 +295,15 @@ export class SimulationHarness {
       coSponsorship: contractAddress(4),
       optimisticGovernor: contractAddress(5),
       treasury: contractAddress(6),
+      convictionVoting: contractAddress(7),
     };
     this.store = this.buildStore();
+    this.convictionSettings = {
+      decayBps: this.store.convictionVoting.decayBps,
+      maxRatioBps: this.store.convictionVoting.maxRatioBps,
+      minThresholdConviction: this.store.convictionVoting.minThresholdConviction,
+      weightBps: this.store.convictionVoting.weightBps,
+    };
 
     const clientConfig: GovernorConfig = {
       governorAddress: this.addresses.governor,
@@ -287,6 +334,13 @@ export class SimulationHarness {
     });
     this.treasuryClient = new TreasuryClient({
       treasuryAddress: this.addresses.treasury,
+      network: clientConfig.network,
+      rpcUrl: clientConfig.rpcUrl,
+      simulationAccount: clientConfig.simulationAccount,
+      maxAttempts: 1,
+    });
+    this.convictionClient = new ConvictionVotingClient({
+      convictionVotingAddress: this.addresses.convictionVoting,
       network: clientConfig.network,
       rpcUrl: clientConfig.rpcUrl,
       simulationAccount: clientConfig.simulationAccount,
@@ -349,6 +403,65 @@ export class SimulationHarness {
       throw new Error(`cancel_queued failed: ${JSON.stringify(result)}`);
     }
     await this.governorClient.pollForConfirmation(result.hash);
+  }
+
+  /**
+   * Self-executions recorded by the conviction-voting track (mock mode only).
+   * The mock models `checkpoint_conviction`'s target invocation the same way
+   * the timelock executor models `execute()` — as a recorded call rather than
+   * a dispatched cross-contract invoke.
+   */
+  getConvictionExecutions(): ConvictionExecutionRecord[] {
+    if (this.config.mode !== "mock") {
+      throw new Error("getConvictionExecutions() is only supported in mock mode");
+    }
+    return [...this.store.convictionVoting.executions];
+  }
+
+  /**
+   * Read a conviction proposal's stake list. `ConvictionVotingClient` does not
+   * wrap `get_stakes`, so this builds the read the same way the SDK's own read
+   * paths do and decodes the simulated return value.
+   */
+  async getConvictionStakes(
+    proposalId: number,
+    offset = 0,
+    limit = 100,
+  ): Promise<Array<{ staker: string; proposalId: bigint; amount: bigint }>> {
+    const server = new SorobanRpc.Server(
+      getRpcUrl(this.config.network ?? "testnet", this.config.mode === "testnet" ? this.config.rpcUrl : "https://mock.invalid"),
+    );
+    const contract = new Contract(this.addresses.convictionVoting);
+    const account = await server.getAccount(SIMULATION_ACCOUNT);
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: getNetworkPassphrase(this.config.network ?? "testnet"),
+    })
+      .addOperation(
+        contract.call(
+          "get_stakes",
+          nativeToScVal(BigInt(proposalId), { type: "u64" }),
+          nativeToScVal(BigInt(offset), { type: "u64" }),
+          nativeToScVal(BigInt(limit), { type: "u64" }),
+        ),
+      )
+      .setTimeout(30)
+      .build();
+    const simulated = await server.simulateTransaction(tx);
+    const parsed = simulated as { error?: string; result?: { retval?: unknown } };
+    if (parsed.error || !parsed.result?.retval) {
+      throw new Error(`get_stakes simulation failed: ${parsed.error ?? "no return value"}`);
+    }
+    const native = scValToNative(parsed.result.retval as Parameters<typeof scValToNative>[0]) as Array<{
+      staker: string;
+      proposal_id: bigint;
+      amount: bigint;
+    }>;
+    return native.map((entry) => ({
+      staker: entry.staker,
+      proposalId: entry.proposal_id,
+      amount: entry.amount,
+    }));
   }
 
   /** Snapshot full contract state for later deterministic replay. */
