@@ -12,13 +12,14 @@
  */
 import { Address, nativeToScVal, scValToNative, SorobanDataBuilder, xdr } from "@stellar/stellar-sdk";
 import { LedgerClock } from "../ledger";
-import { cloneStore, CoSponsorshipDraftRecord, MockLedgerStore, OptimisticProposalRecord, ProposalRecord } from "./store";
+import { cloneStore, BudgetStreamRecord, CoSponsorshipDraftRecord, MockLedgerStore, OptimisticProposalRecord, ProposalRecord, StreamSpendRecord } from "./store";
 import { MockContractError } from "./errors";
 import { governorExecutor } from "./governor-executor";
 import { timelockExecutor } from "./timelock-executor";
 import { tokenVotesExecutor } from "./token-votes-executor";
 import { coSponsorshipExecutor } from "./co-sponsorship-executor";
 import { optimisticGovernorExecutor } from "./optimistic-governor-executor";
+import { treasuryExecutor, StreamBudgetReportRecord, TreasuryBudgetSummaryRecord } from "./treasury-executor";
 import {
   encAddress,
   encBool,
@@ -162,11 +163,97 @@ function encodeOptimisticProposal(proposal: OptimisticProposalRecord): xdr.ScVal
   });
 }
 
+function encodeBudgetStream(stream: BudgetStreamRecord): xdr.ScVal {
+  return encMap({
+    id: encU64(stream.id),
+    name: encSymbol(stream.name),
+    owner: encAddress(stream.owner),
+    token: encAddress(stream.token),
+    total_allocated: encI128(stream.totalAllocated),
+    total_spent: encI128(stream.totalSpent),
+    start_ledger: encU32(stream.startLedger),
+    end_ledger: encU32(stream.endLedger),
+    is_active: encBool(stream.isActive),
+    is_revoked: encBool(stream.isRevoked),
+    // `Option<u32>`: `None` goes on the wire as `ScvVoid`.
+    revoked_at_ledger: stream.revokedAtLedger != null ? encU32(stream.revokedAtLedger) : encVoid(),
+    max_single_spend: encI128(stream.maxSingleSpend),
+    cooldown_ledgers: encU32(stream.cooldownLedgers),
+    last_spend_ledger: encU32(stream.lastSpendLedger),
+    spend_count: encU32(stream.spendCount),
+    created_by_proposal_id: encU64(stream.createdByProposalId),
+  });
+}
+
+function encodeStreamSpend(spend: StreamSpendRecord): xdr.ScVal {
+  return encMap({
+    stream_id: encU64(spend.streamId),
+    spend_index: encU32(spend.spendIndex),
+    recipient: encAddress(spend.recipient),
+    amount: encI128(spend.amount),
+    memo: encString(spend.memo),
+    executed_at_ledger: encU32(spend.executedAtLedger),
+    executed_by: encAddress(spend.executedBy),
+  });
+}
+
+function encodeStreamBudgetReport(report: StreamBudgetReportRecord): xdr.ScVal {
+  return encMap({
+    stream_id: encU64(report.streamId),
+    name: encSymbol(report.name),
+    total_allocated: encI128(report.totalAllocated),
+    total_spent: encI128(report.totalSpent),
+    remaining: encI128(report.remaining),
+    utilization_bps: encU32(report.utilizationBps),
+    is_active: encBool(report.isActive),
+    days_remaining: encU32(report.daysRemaining),
+    spend_count: encU32(report.spendCount),
+    avg_spend: encI128(report.avgSpend),
+  });
+}
+
+function encodeTokenAmounts(pairs: Array<[string, bigint]>): xdr.ScVal {
+  return encVec(pairs.map(([token, amount]) => encVec([encAddress(token), encI128(amount)])));
+}
+
+function encodeTreasuryBudgetSummary(summary: TreasuryBudgetSummaryRecord): xdr.ScVal {
+  return encMap({
+    total_streams: encU32(summary.totalStreams),
+    active_streams: encU32(summary.activeStreams),
+    total_allocated_by_token: encodeTokenAmounts(summary.totalAllocatedByToken),
+    total_spent_by_token: encodeTokenAmounts(summary.totalSpentByToken),
+    total_remaining_by_token: encodeTokenAmounts(summary.totalRemainingByToken),
+  });
+}
+
 function encodeReturn(
-  contract: "governor" | "timelock" | "votes" | "coSponsorship" | "optimisticGovernor",
+  contract: "governor" | "timelock" | "votes" | "coSponsorship" | "optimisticGovernor" | "treasury",
   fnName: string,
   value: unknown,
 ): xdr.ScVal {
+  if (contract === "treasury") {
+    switch (fnName) {
+      case "create_stream":
+        return encU64(value as bigint);
+      case "stream_spend":
+      case "top_up_stream":
+        return encVoid();
+      case "get_stream":
+        return encodeBudgetStream(value as BudgetStreamRecord);
+      case "get_streams":
+        return encVec((value as BudgetStreamRecord[]).map(encodeBudgetStream));
+      case "get_stream_spends":
+        return encVec((value as StreamSpendRecord[]).map(encodeStreamSpend));
+      case "get_stream_report":
+        return encodeStreamBudgetReport(value as StreamBudgetReportRecord);
+      case "get_stream_remaining":
+        return encI128(value as bigint);
+      case "get_budget_summary":
+        return encodeTreasuryBudgetSummary(value as TreasuryBudgetSummaryRecord);
+      default:
+        throw new Error(`MockSorobanServer: no encoder for treasury.${fnName}`);
+    }
+  }
   if (contract === "optimisticGovernor") {
     switch (fnName) {
       case "propose":
@@ -300,12 +387,13 @@ export class MockSorobanServer {
 
   private resolveContract(
     address: string,
-  ): "governor" | "timelock" | "votes" | "coSponsorship" | "optimisticGovernor" {
+  ): "governor" | "timelock" | "votes" | "coSponsorship" | "optimisticGovernor" | "treasury" {
     if (address === this.store.addresses.governor) return "governor";
     if (address === this.store.addresses.timelock) return "timelock";
     if (address === this.store.addresses.votes) return "votes";
     if (address === this.store.addresses.coSponsorship) return "coSponsorship";
     if (address === this.store.addresses.optimisticGovernor) return "optimisticGovernor";
+    if (address === this.store.addresses.treasury) return "treasury";
     throw new Error(`MockSorobanServer: unknown contract address ${address}`);
   }
 
@@ -330,6 +418,13 @@ export class MockSorobanServer {
       const handler = (optimisticGovernorExecutor as Record<string, (...a: unknown[]) => unknown>)[invocation.functionName];
       if (!handler) {
         throw new Error(`MockSorobanServer: unknown optimistic-governor function ${invocation.functionName}`);
+      }
+      return handler(store, this.clock, invocation.caller, invocation.args);
+    }
+    if (contract === "treasury") {
+      const handler = (treasuryExecutor as Record<string, (...a: unknown[]) => unknown>)[invocation.functionName];
+      if (!handler) {
+        throw new Error(`MockSorobanServer: unknown treasury function ${invocation.functionName}`);
       }
       return handler(store, this.clock, invocation.caller, invocation.args);
     }

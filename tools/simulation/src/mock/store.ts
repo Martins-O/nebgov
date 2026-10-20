@@ -1,8 +1,8 @@
 /**
- * In-memory ledger state shared by the mock Governor/Timelock/TokenVotes
- * executors. This is intentionally a plain, structured-cloneable object graph
- * (no class instances, no XDR types) so that `snapshot()`/`restore()` and the
- * side-effect-free `simulateTransaction` dry run can both use
+ * In-memory ledger state shared by the mock Governor/Timelock/TokenVotes/
+ * Treasury executors. This is intentionally a plain, structured-cloneable object
+ * graph (no class instances, no XDR types) so that `snapshot()`/`restore()` and
+ * the side-effect-free `simulateTransaction` dry run can both use
  * `structuredClone`.
  */
 
@@ -94,6 +94,7 @@ export interface ContractAddresses {
   votes: string;
   coSponsorship: string;
   optimisticGovernor: string;
+  treasury: string;
 }
 
 export type OptimisticProposalLifecycle =
@@ -152,6 +153,50 @@ export interface CoSponsorshipState {
   draftCount: bigint;
 }
 
+/** A budget stream allocated by the treasury contract (`contracts/treasury/src/streams.rs`). */
+export interface BudgetStreamRecord {
+  id: bigint;
+  name: string;
+  owner: string;
+  token: string;
+  totalAllocated: bigint;
+  totalSpent: bigint;
+  startLedger: number;
+  endLedger: number;
+  isActive: boolean;
+  isRevoked: boolean;
+  revokedAtLedger: number | null;
+  maxSingleSpend: bigint;
+  cooldownLedgers: number;
+  lastSpendLedger: number;
+  spendCount: number;
+  createdByProposalId: bigint;
+}
+
+/** A single withdrawal recorded against a budget stream. */
+export interface StreamSpendRecord {
+  streamId: bigint;
+  spendIndex: number;
+  recipient: string;
+  amount: bigint;
+  memo: string;
+  executedAtLedger: number;
+  executedBy: string;
+}
+
+export interface TreasuryState {
+  /** Address authorised to sign the governance-gated stream calls. */
+  governor: string;
+  streams: Map<bigint, BudgetStreamRecord>;
+  streamCount: bigint;
+  /** Stream ID -> spend records in execution order. */
+  spends: Map<bigint, StreamSpendRecord[]>;
+  /** Tokens any stream has been denominated in, in order of first use. */
+  tokenList: string[];
+  totalStreamedByToken: Map<string, bigint>;
+  totalSpentByToken: Map<string, bigint>;
+}
+
 export interface MockLedgerStore {
   addresses: ContractAddresses;
   governor: GovernorState;
@@ -159,6 +204,7 @@ export interface MockLedgerStore {
   votes: TokenVotesState;
   coSponsorship: CoSponsorshipState;
   optimisticGovernor: OptimisticGovernorState;
+  treasury: TreasuryState;
 }
 
 export function cloneStore(store: MockLedgerStore): MockLedgerStore {

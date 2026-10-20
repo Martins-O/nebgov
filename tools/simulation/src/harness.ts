@@ -7,6 +7,7 @@ import {
   Network,
   OptimisticGovernorClient,
   TimelockClient,
+  TreasuryClient,
   VoteType,
   VotesClient,
 } from "@nebgov/sdk";
@@ -68,6 +69,18 @@ export interface SimulationConfig {
   delegations: Record<string, string>;
   /** Starting ledger sequence number. Defaults to 1000. */
   initialLedger?: number;
+  /**
+   * Address authorized to sign the treasury contract's governance-gated stream
+   * calls (`create_stream`, `top_up_stream`). Defaults to the governor contract
+   * address, which the SDK's signer-based `TreasuryClient` writes cannot
+   * satisfy — set it to an actor's public key to drive streams directly.
+   */
+  treasuryGovernor?: string;
+  /**
+   * Balance credited to the treasury contract on the single token ledger the
+   * mock models, so stream spends have funds to debit. Defaults to 0.
+   */
+  treasuryBalance?: bigint;
   /** Required when mode === "testnet". */
   rpcUrl?: string;
   network?: Network;
@@ -79,6 +92,7 @@ export interface DeployedContracts {
   votes: string;
   coSponsorship: string;
   optimisticGovernor: string;
+  treasury: string;
 }
 
 interface ClockSnapshot {
@@ -125,10 +139,12 @@ export class SimulationHarness {
   timelockClient!: TimelockClient;
   votesClient!: VotesClient;
   optimisticGovernorClient!: OptimisticGovernorClient;
+  treasuryClient!: TreasuryClient;
 
   private store!: MockLedgerStore;
   private mockServer?: MockSorobanServer;
-  private addresses!: DeployedContracts;
+  /** Addresses returned by `boot()`, also handy for scenarios that need them mid-run. */
+  addresses!: DeployedContracts;
 
   constructor(config: SimulationConfig) {
     if (config.mode === "testnet" && !config.rpcUrl) {
@@ -209,9 +225,20 @@ export class SimulationHarness {
         proposalCount: 0n,
         objectorVoted: new Set(),
       },
+      treasury: {
+        governor: this.config.treasuryGovernor ?? this.addresses.governor,
+        streams: new Map(),
+        streamCount: 0n,
+        spends: new Map(),
+        tokenList: [],
+        totalStreamedByToken: new Map(),
+        totalSpentByToken: new Map(),
+      },
     };
 
     seedBalances(store.votes, this.config.tokenBalances);
+    // Stream spends debit this account on the one ledger the mock models.
+    store.votes.balances.set(addresses.treasury, this.config.treasuryBalance ?? 0n);
     for (const [delegator, delegatee] of Object.entries(this.config.delegations)) {
       applyDelegation(store.votes, this.clock, delegator, delegatee);
     }
@@ -227,6 +254,7 @@ export class SimulationHarness {
       votes: contractAddress(3),
       coSponsorship: contractAddress(4),
       optimisticGovernor: contractAddress(5),
+      treasury: contractAddress(6),
     };
     this.store = this.buildStore();
 
@@ -257,6 +285,13 @@ export class SimulationHarness {
       simulationAccount: clientConfig.simulationAccount,
       maxAttempts: 1,
     });
+    this.treasuryClient = new TreasuryClient({
+      treasuryAddress: this.addresses.treasury,
+      network: clientConfig.network,
+      rpcUrl: clientConfig.rpcUrl,
+      simulationAccount: clientConfig.simulationAccount,
+      maxAttempts: 1,
+    });
 
     return this.addresses;
   }
@@ -266,13 +301,21 @@ export class SimulationHarness {
     this.clock.advance(n);
   }
 
-  /** Run a scenario against this harness. */
+  /**
+   * Run a scenario against this harness.
+   *
+   * The return type is narrowed to the scenario's own `run()` result, so
+   * scenarios that expose extra fields (e.g. the treasury scenario's
+   * `streamId`) stay typed.
+   */
   async run<T extends BaseScenario, A extends unknown[]>(
     ScenarioClass: new (harness: SimulationHarness, ...args: A) => T,
     ...args: A
-  ): Promise<SimulationResult> {
+  ): Promise<Awaited<ReturnType<T["run"]>>> {
     const scenario = new ScenarioClass(this, ...args);
-    return scenario.run();
+    // `scenario.run()` is exactly `T["run"]`; TS just cannot see that through
+    // the `BaseScenario` constraint on `T`.
+    return scenario.run() as Promise<Awaited<ReturnType<T["run"]>>>;
   }
 
   /**
