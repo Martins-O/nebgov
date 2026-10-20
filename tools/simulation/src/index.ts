@@ -39,6 +39,11 @@ export type {
   ConvictionLockScenarioConfig,
   ConvictionLockScenarioResult,
 } from "./scenarios/conviction_lock";
+export { ProposalBondsLifecycleScenario } from "./scenarios/proposal_bonds_lifecycle";
+export type {
+  ProposalBondsLifecycleScenarioConfig,
+  ProposalBondsLifecycleScenarioResult,
+} from "./scenarios/proposal_bonds_lifecycle";
 export type { ConvictionExecutionRecord } from "./mock/store";
 
 export {

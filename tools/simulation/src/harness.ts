@@ -7,6 +7,7 @@ import {
   GovernorConfig,
   Network,
   OptimisticGovernorClient,
+  ProposalBondsClient,
   TimelockClient,
   TreasuryClient,
   VoteType,
@@ -60,6 +61,22 @@ export interface GovernorSimulationSettings {
   optimisticProposerBondAmount?: bigint;
   /** Optimistic proposer bond token address. Defaults to the votes contract. */
   optimisticProposerBondToken?: string;
+  /** Amount `lock_bond` posts per proposal on the proposal-bonds registry. Defaults to 10_000. */
+  proposalBondAmount?: bigint;
+  /** Token the proposal-bonds registry is denominated in. Defaults to the votes contract. */
+  proposalBondToken?: string;
+  /**
+   * Ledgers after a correlated proposal's `end_ledger` during which
+   * `refund_bond` is blocked, giving a `slash` governance proposal time to
+   * land first. Defaults to 2_000.
+   */
+  proposalRefundGraceLedgers?: number;
+  /**
+   * Ledgers after `lock_bond` after which `refund_bond` succeeds
+   * unconditionally. Defaults to 1_000_000, mirroring the contract's
+   * `BOND_TTL_LEDGERS`.
+   */
+  proposalMaxLockLedgers?: number;
 }
 
 /** Parameters the conviction-voting track boots with (mirrors `contracts/conviction-voting`'s `initialize`). */
@@ -111,6 +128,7 @@ export interface DeployedContracts {
   optimisticGovernor: string;
   treasury: string;
   convictionVoting: string;
+  proposalBonds: string;
 }
 
 interface ClockSnapshot {
@@ -135,6 +153,9 @@ const DEFAULT_CONVICTION_DECAY_BPS = 9_000;
 const DEFAULT_CONVICTION_MAX_RATIO_BPS = 2_000;
 const DEFAULT_CONVICTION_MIN_THRESHOLD = 100n;
 const DEFAULT_CONVICTION_WEIGHT_BPS = 10_000;
+const DEFAULT_PROPOSAL_BOND_AMOUNT = 10_000n;
+const DEFAULT_PROPOSAL_REFUND_GRACE_LEDGERS = 2_000;
+const DEFAULT_PROPOSAL_MAX_LOCK_LEDGERS = 1_000_000; // mirrors contracts/proposal-bonds' BOND_TTL_LEDGERS.
 const DEFAULT_GUARDIAN = Keypair.fromRawEd25519Seed(
   createHash("sha256").update("nebgov-simulation-actor:default-guardian").digest(),
 ).publicKey();
@@ -163,6 +184,7 @@ export class SimulationHarness {
   optimisticGovernorClient!: OptimisticGovernorClient;
   treasuryClient!: TreasuryClient;
   convictionClient!: ConvictionVotingClient;
+  proposalBondsClient!: ProposalBondsClient;
 
   /** Conviction-voting track parameters the harness booted with. */
   convictionSettings!: ConvictionSimulationSettings;
@@ -274,6 +296,17 @@ export class SimulationHarness {
         stakeByStaker: new Map(),
         executions: [],
       },
+      proposalBonds: {
+        admin: this.config.settings.guardian ?? DEFAULT_GUARDIAN,
+        bondToken: this.config.settings.proposalBondToken ?? this.addresses.votes,
+        bondAmount: this.config.settings.proposalBondAmount ?? DEFAULT_PROPOSAL_BOND_AMOUNT,
+        governor: this.addresses.governor,
+        refundGraceLedgers:
+          this.config.settings.proposalRefundGraceLedgers ?? DEFAULT_PROPOSAL_REFUND_GRACE_LEDGERS,
+        maxLockLedgers:
+          this.config.settings.proposalMaxLockLedgers ?? DEFAULT_PROPOSAL_MAX_LOCK_LEDGERS,
+        bonds: new Map(),
+      },
     };
 
     seedBalances(store.votes, this.config.tokenBalances);
@@ -296,6 +329,7 @@ export class SimulationHarness {
       optimisticGovernor: contractAddress(5),
       treasury: contractAddress(6),
       convictionVoting: contractAddress(7),
+      proposalBonds: contractAddress(8),
     };
     this.store = this.buildStore();
     this.convictionSettings = {
@@ -313,6 +347,7 @@ export class SimulationHarness {
       network: this.config.network ?? "testnet",
       rpcUrl: this.config.mode === "testnet" ? this.config.rpcUrl : "https://mock.invalid",
       simulationAccount: this.config.mode === "mock" ? SIMULATION_ACCOUNT : undefined,
+      proposalBondsAddress: this.addresses.proposalBonds,
       maxAttempts: 1,
     };
 
@@ -346,6 +381,7 @@ export class SimulationHarness {
       simulationAccount: clientConfig.simulationAccount,
       maxAttempts: 1,
     });
+    this.proposalBondsClient = new ProposalBondsClient(clientConfig);
 
     return this.addresses;
   }
@@ -378,6 +414,24 @@ export class SimulationHarness {
    * built the same way the SDK's own write methods build theirs.
    */
   async cancelQueuedProposal(guardian: Keypair, proposalId: bigint): Promise<void> {
+    await this.invokeGovernorCancel("cancel_queued", guardian, proposalId);
+  }
+
+  /**
+   * Invoke `cancel` on the governor contract — a guardian cancelling a
+   * currently-`Active` proposal (also how a proposer cancels a `Pending`
+   * one). Not yet wrapped by `@nebgov/sdk`'s `GovernorClient`.
+   */
+  async cancelProposalViaGuardian(guardian: Keypair, proposalId: bigint): Promise<void> {
+    await this.invokeGovernorCancel("cancel", guardian, proposalId);
+  }
+
+  /** Shared plumbing for the guardian-gated `cancel`/`cancel_queued` writes. */
+  private async invokeGovernorCancel(
+    fnName: "cancel" | "cancel_queued",
+    guardian: Keypair,
+    proposalId: bigint,
+  ): Promise<void> {
     const server = this.governorClient.server;
     const contract = this.governorClient.contract;
     const account = await server.getAccount(guardian.publicKey());
@@ -387,7 +441,7 @@ export class SimulationHarness {
     })
       .addOperation(
         contract.call(
-          "cancel_queued",
+          fnName,
           nativeToScVal(guardian.publicKey(), { type: "address" }),
           nativeToScVal(proposalId, { type: "u64" }),
         ),
@@ -400,7 +454,7 @@ export class SimulationHarness {
 
     const result = await server.sendTransaction(prepared);
     if (result.status === "ERROR") {
-      throw new Error(`cancel_queued failed: ${JSON.stringify(result)}`);
+      throw new Error(`${fnName} failed: ${JSON.stringify(result)}`);
     }
     await this.governorClient.pollForConfirmation(result.hash);
   }

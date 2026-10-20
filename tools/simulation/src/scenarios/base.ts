@@ -10,6 +10,8 @@ export interface ProposalScenarioConfig {
   targets: string[];
   fnNames: string[];
   calldatas: Buffer[];
+  /** Hex-encoded `BytesN<32>` description hash. Defaults to `"0".repeat(64)`. */
+  descriptionHash?: string;
 }
 
 export interface SimulationResult {

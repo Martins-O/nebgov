@@ -539,8 +539,34 @@ export async function getProposal(
       .result?.retval;
     if (!raw) throw new Error("No return value");
 
-    return scValToNative(raw) as Proposal;
+    return mapProposalNative(scValToNative(raw) as Record<string, unknown>);
   });
+}
+
+/**
+ * Normalize the governor contract's snake_case `Proposal` struct (as returned
+ * by `get_proposal`) into the camelCase {@link Proposal} used throughout the
+ * SDK. Already-camelCase inputs are passed through unchanged.
+ */
+export function mapProposalNative(native: Record<string, unknown>): Proposal {
+  const pick = <T>(camel: string, snake: string, fallback: T): T => {
+    if (native[camel] !== undefined) return native[camel] as T;
+    if (native[snake] !== undefined) return native[snake] as T;
+    return fallback;
+  };
+
+  return {
+    id: toBigInt(pick("id", "id", 0)),
+    proposer: String(pick("proposer", "proposer", "")),
+    description: String(pick("description", "description", "")),
+    startLedger: Number(pick("startLedger", "start_ledger", 0)),
+    endLedger: Number(pick("endLedger", "end_ledger", 0)),
+    votesFor: toBigInt(pick("votesFor", "votes_for", 0)),
+    votesAgainst: toBigInt(pick("votesAgainst", "votes_against", 0)),
+    votesAbstain: toBigInt(pick("votesAbstain", "votes_abstain", 0)),
+    executed: Boolean(pick("executed", "executed", false)),
+    cancelled: Boolean(pick("cancelled", "cancelled", false)),
+  };
 }
 
 /**

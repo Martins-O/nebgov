@@ -91,12 +91,19 @@ export class ProposalBondsClient {
         ? rawDescriptionHash
         : Buffer.from(rawDescriptionHash as Uint8Array).toString("hex");
 
+    // `BondState` is a unit enum, which decodes to a one-element
+    // `Vec<Symbol>` (`["Locked"]`) rather than a bare string.
+    const rawState = native.state;
+    const state = (
+      Array.isArray(rawState) && typeof rawState[0] === "string" ? rawState[0] : rawState
+    ) as BondState;
+
     return {
       proposer: String(native.proposer),
       descriptionHash,
       amount: BigInt(native.amount as bigint | number | string),
       lockedLedger: Number(native.locked_ledger),
-      state: native.state as BondState,
+      state,
     };
   }
 

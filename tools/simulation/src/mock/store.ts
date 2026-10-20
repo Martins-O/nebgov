@@ -96,6 +96,7 @@ export interface ContractAddresses {
   optimisticGovernor: string;
   treasury: string;
   convictionVoting: string;
+  proposalBonds: string;
 }
 
 export type OptimisticProposalLifecycle =
@@ -256,6 +257,35 @@ export interface ConvictionVotingState {
   executions: ConvictionExecutionRecord[];
 }
 
+/** Lifecycle state of a proposer bond — mirrors `contracts/proposal-bonds`'s `BondState`. */
+export type ProposalBondLifecycle = "Locked" | "Refunded" | "Slashed";
+
+/** A refundable bond posted alongside a governor proposal, keyed by description hash. */
+export interface ProposalBondRecord {
+  proposer: string;
+  /** Hex-encoded `BytesN<32>` the bond is keyed by (lowercase). */
+  descriptionHash: string;
+  amount: bigint;
+  lockedLedger: number;
+  state: ProposalBondLifecycle;
+}
+
+/** The proposal-bonds registry (`contracts/proposal-bonds/src/lib.rs`). */
+export interface ProposalBondsState {
+  admin: string;
+  /** Token address bonds are denominated in; the mock moves it on `store.votes.balances`. */
+  bondToken: string;
+  bondAmount: bigint;
+  /** Governor contract whose proposals the bonds correlate to, and the sole `slash` caller. */
+  governor: string;
+  /** Ledgers after a correlated proposal's `end_ledger` before `refund_bond` succeeds. */
+  refundGraceLedgers: number;
+  /** Ledgers after `lock_bond` after which `refund_bond` succeeds unconditionally. */
+  maxLockLedgers: number;
+  /** description hash (hex) -> bond record. */
+  bonds: Map<string, ProposalBondRecord>;
+}
+
 export interface MockLedgerStore {
   addresses: ContractAddresses;
   governor: GovernorState;
@@ -265,6 +295,7 @@ export interface MockLedgerStore {
   optimisticGovernor: OptimisticGovernorState;
   treasury: TreasuryState;
   convictionVoting: ConvictionVotingState;
+  proposalBonds: ProposalBondsState;
 }
 
 export function cloneStore(store: MockLedgerStore): MockLedgerStore {

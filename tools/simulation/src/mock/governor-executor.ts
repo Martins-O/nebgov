@@ -6,11 +6,13 @@
  * quorum, `Single` voting strategy only (no `MultiToken`), single-action
  * proposals only (no batch/multi-target `queue`/`execute`).
  */
+import { scValToNative, xdr } from "@stellar/stellar-sdk";
 import { LedgerClock } from "../ledger";
 import { GovernorState, MockLedgerStore, ProposalRecord } from "./store";
 import { MockContractError } from "./errors";
 import { tokenVotesExecutor } from "./token-votes-executor";
 import { cancelOperation, executeOperation, scheduleOperation } from "./timelock-executor";
+import { proposalBondsExecutor } from "./proposal-bonds-executor";
 import { GovernorErrorCode } from "@nebgov/sdk";
 
 export type ProposalStateName =
@@ -146,6 +148,30 @@ function mustGetProposal(store: MockLedgerStore, id: bigint): ProposalRecord {
   const proposal = store.governor.proposals.get(id);
   if (!proposal) throw new MockContractError(GovernorErrorCode.ProposalNotFound, `proposal ${id} not found`);
   return proposal;
+}
+
+/**
+ * Narrow exception to the timelock executor's "record, don't invoke"
+ * simplification: `contracts/proposal-bonds`'s `slash` is only ever
+ * reachable as the target of an executed governance proposal (the governor
+ * contract must be the caller), so the mock dispatches proposal-bonds
+ * targets in-process with the governor itself as the caller, mirroring the
+ * real cross-contract invoke. The scheduled action's calldata is the
+ * `ScVal` XDR the proposal was queued with (see
+ * `ProposalBondsClient.encodeSlashCalldata`). Every other target stays
+ * recorded-only.
+ */
+function dispatchProposalBondsAction(store: MockLedgerStore, clock: LedgerClock, proposal: ProposalRecord): void {
+  const opId = proposal.opIds[0];
+  const op = opId ? store.timelock.operations.get(opId) : undefined;
+  if (!op || op.target !== store.addresses.proposalBonds) return;
+
+  const handler = (proposalBondsExecutor as Record<string, (...a: unknown[]) => unknown>)[op.fnName];
+  if (!handler) {
+    throw new Error(`execute: unknown proposal-bonds action ${op.fnName}`);
+  }
+  const args = scValToNative(xdr.ScVal.fromXDR(Buffer.from(op.data))) as unknown[];
+  handler(store, clock, store.addresses.governor, args);
 }
 
 export const governorExecutor = {
@@ -292,6 +318,7 @@ export const governorExecutor = {
       throw new MockContractError(GovernorErrorCode.MissingOpIds, "execute: missing op ids");
     }
     executeOperation(store.timelock, clock, proposal.opIds[0]);
+    dispatchProposalBondsAction(store, clock, proposal);
     proposal.executed = true;
     return null;
   },
