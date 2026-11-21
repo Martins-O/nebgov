@@ -31,6 +31,8 @@ const TREASURY_STRATEGIES_ADDRESS =
 const OPTIMISTIC_GOVERNOR_ADDRESS =
   process.env.OPTIMISTIC_GOVERNOR_ADDRESS ?? "";
 const VOTE_ESCROW_ADDRESS = process.env.VOTE_ESCROW_ADDRESS ?? "";
+const GUARDIAN_COUNCIL_ADDRESS =
+  process.env.GUARDIAN_COUNCIL_ADDRESS ?? "";
 const TREASURY_SIMULATION_ACCOUNT =
   process.env.TREASURY_SIMULATION_ACCOUNT ?? "";
 const NETWORK_PASSPHRASE =
@@ -53,6 +55,7 @@ export const INDEXED_CONTRACTS = {
   TREASURY_STRATEGIES_ADDRESS,
   OPTIMISTIC_GOVERNOR_ADDRESS,
   VOTE_ESCROW_ADDRESS,
+  GUARDIAN_COUNCIL_ADDRESS,
 };
 
 for (const [name, address] of Object.entries(INDEXED_CONTRACTS)) {
@@ -122,6 +125,7 @@ async function runIndexer(): Promise<void> {
     treasuryStrategiesAddress: TREASURY_STRATEGIES_ADDRESS,
     optimisticGovernorAddress: OPTIMISTIC_GOVERNOR_ADDRESS,
     voteEscrowAddress: VOTE_ESCROW_ADDRESS,
+    guardianCouncilAddress: GUARDIAN_COUNCIL_ADDRESS,
     treasuryStateReader,
     pollIntervalMs: POLL_INTERVAL_MS,
   };

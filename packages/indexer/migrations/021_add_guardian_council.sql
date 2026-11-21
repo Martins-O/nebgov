@@ -7,7 +7,7 @@
 CREATE TABLE IF NOT EXISTS guardian_council_actions (
   id                   SERIAL PRIMARY KEY,
   action_id            BIGINT NOT NULL,
-  action_kind          TEXT NOT NULL,        -- Pause | Unpause | CancelActive | CancelQueued | RotateMember | SetThreshold
+  action_kind          TEXT NOT NULL,        -- Pause | Unpause | CancelActive | CancelQueued | RotateMember | SetThreshold | SetActionTtl
   proposal_id          BIGINT,               -- populated for CancelActive / CancelQueued
   proposer             TEXT NOT NULL,
   created_at_ledger    INT NOT NULL,

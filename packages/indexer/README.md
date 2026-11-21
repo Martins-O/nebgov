@@ -231,6 +231,7 @@ docker run --env-file packages/indexer/.env \
 | `TREASURY_STRATEGIES_ADDRESS` | No | - | Stellar contract address of the treasury yield-strategy allocator |
 | `OPTIMISTIC_GOVERNOR_ADDRESS` | No | - | Stellar contract address of the optimistic-governance track |
 | `VOTE_ESCROW_ADDRESS` | No | - | Stellar contract address of the vote-escrow contract (lock create, increase and withdraw events) |
+| `GUARDIAN_COUNCIL_ADDRESS` | No | - | Stellar contract address of the guardian council (action proposals, approvals, membership rotations) |
 | `VOTING_REWARDS_ADDRESS` | No | - | Stellar contract address of the voting-rewards contract (not indexed yet; kept in sync with the root `.env.example`) |
 | `STELLAR_NETWORK_PASSPHRASE` | No | Testnet passphrase | Network passphrase used for treasury read simulations |
 | `POLL_INTERVAL_MS` | No | `5000` | Milliseconds between event polling cycles |
@@ -256,6 +257,8 @@ LIQUIDITY_ADDRESS=CC3D5KRYM6CB7OQ4O5K3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3
 SIGNAL_ANCHOR_ADDRESS=CDSIGNALANCHORZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3
 TREASURY_STRATEGIES_ADDRESS=CETREASURYSTRATEGIESZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3
 OPTIMISTIC_GOVERNOR_ADDRESS=CFOPTIMISTICGOVZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3
+VOTE_ESCROW_ADDRESS=CVOTEESCROWZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3
+GUARDIAN_COUNCIL_ADDRESS=CGUARDIANCOUNZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3
 
 # Indexer Configuration
 POLL_INTERVAL_MS=5000

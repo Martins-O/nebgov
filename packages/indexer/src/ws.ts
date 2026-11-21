@@ -80,7 +80,14 @@ export type WsEventType =
   | "vote_escrow_lock_created"
   | "vote_escrow_lock_increased"
   | "vote_escrow_lock_extended"
-  | "vote_escrow_lock_withdrawn";
+  | "vote_escrow_lock_withdrawn"
+  | "action_proposed"
+  | "action_approved"
+  | "approval_revoked"
+  | "action_executed"
+  | "membership_rotated"
+  | "threshold_updated"
+  | "action_ttl_updated";
 
 export interface WsEvent {
   type: WsEventType;
