@@ -91,6 +91,10 @@ pub enum DataKey {
     Bond(BytesN<32>),
     RefundGraceLedgers,
     MaxLockLedgers,
+    /// The token a bond was locked in, captured at `lock_bond` time so a
+    /// later `update_settings` that changes `BondToken` can never make
+    /// `refund_bond`/`slash` pay out an asset the bond was not posted in.
+    BondTokenOf(BytesN<32>),
 }
 
 /// ~1,000,000 ledgers (~58 days at the network's ~5s ledger close time),
@@ -152,6 +156,41 @@ impl ProposalBondsContract {
             .unwrap_or_else(|| env.panic_with_error(ProposalBondsError::NotInitialized))
     }
 
+    /// The token `description_hash`'s bond was locked in. Falls back to the
+    /// current `BondToken` for a bond with no recorded token.
+    fn locked_bond_token(env: &Env, description_hash: &BytesN<32>) -> Address {
+        env.storage()
+            .persistent()
+            .get(&DataKey::BondTokenOf(description_hash.clone()))
+            .unwrap_or_else(|| Self::get_bond_token(env))
+    }
+
+    fn require_admin(env: &Env, admin: &Address) {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(ProposalBondsError::NotInitialized));
+        admin.require_auth();
+        if admin != &stored_admin {
+            env.panic_with_error(ProposalBondsError::NotAuthorized);
+        }
+    }
+
+    /// Bounds on the refund windows. A `max_lock_ledgers` of 0 would open the
+    /// refund escape hatch in the same ledger a bond is locked, one no longer
+    /// than `refund_grace_ledgers` would let the escape hatch pre-empt the
+    /// slashing window, and one longer than `BOND_TTL_LEDGERS` would let the
+    /// bond entry be archived before the escape hatch opens.
+    fn validate_lock_window(env: &Env, refund_grace_ledgers: u32, max_lock_ledgers: u32) {
+        if max_lock_ledgers == 0
+            || max_lock_ledgers <= refund_grace_ledgers
+            || max_lock_ledgers > BOND_TTL_LEDGERS
+        {
+            env.panic_with_error(ProposalBondsError::InvalidLockWindow);
+        }
+    }
+
     /// Lock the configured bond amount from `proposer`, keyed by
     /// `description_hash` so it correlates 1:1 with the governor proposal
     /// the caller submits alongside it (bonding and proposing are two
@@ -194,6 +233,9 @@ impl ProposalBondsContract {
         env.storage()
             .persistent()
             .set(&DataKey::Bond(description_hash.clone()), &bond);
+        env.storage()
+            .persistent()
+            .set(&DataKey::BondTokenOf(description_hash.clone()), &bond_token);
         // A locked bond must outlive the full governor proposal lifecycle
         // (voting delay + voting period + grace period) plus this contract's
         // own post-terminal RefundGraceLedgers window before refund_bond or
@@ -201,6 +243,11 @@ impl ProposalBondsContract {
         // rather than trying to read governor's settings cross-contract here.
         env.storage().persistent().extend_ttl(
             &DataKey::Bond(description_hash.clone()),
+            BOND_TTL_LEDGERS,
+            BOND_TTL_LEDGERS,
+        );
+        env.storage().persistent().extend_ttl(
+            &DataKey::BondTokenOf(description_hash.clone()),
             BOND_TTL_LEDGERS,
             BOND_TTL_LEDGERS,
         );
@@ -282,7 +329,7 @@ impl ProposalBondsContract {
             }
         }
 
-        let bond_token = Self::get_bond_token(&env);
+        let bond_token = Self::locked_bond_token(&env, &description_hash);
         token::TokenClient::new(&env, &bond_token).transfer(
             &env.current_contract_address(),
             &bond.proposer,
@@ -315,7 +362,7 @@ impl ProposalBondsContract {
             env.panic_with_error(ProposalBondsError::BondNotLocked);
         }
 
-        let bond_token = Self::get_bond_token(&env);
+        let bond_token = Self::locked_bond_token(&env, &description_hash);
         token::TokenClient::new(&env, &bond_token).transfer(
             &env.current_contract_address(),
             &recipient,
@@ -356,6 +403,53 @@ impl ProposalBondsContract {
             .unwrap_or(0);
         env.storage().instance().set(&DataKey::BondAmount, &new_amount);
         events::emit_bond_amount_updated(&env, &admin, old_amount, new_amount);
+    }
+
+    /// Admin-only: replace the bond token, governor, `RefundGraceLedgers` and
+    /// `MaxLockLedgers` (the bond amount has its own `update_bond_amount`).
+    ///
+    /// - `bond_token` applies to bonds locked from now on. A bond that is
+    ///   already locked is always refunded or slashed in the token it was
+    ///   locked in.
+    /// - `governor` is the contract `refund_bond` queries and the only caller
+    ///   `slash` accepts, so point it at a redeployed governor here. Bonds
+    ///   whose proposals live on the old governor can no longer be looked up
+    ///   there and are refundable once `MaxLockLedgers` has passed.
+    /// - `refund_grace_ledgers` and `max_lock_ledgers` are read when a bond is
+    ///   refunded, so they apply to bonds that are already locked too.
+    pub fn update_settings(
+        env: Env,
+        admin: Address,
+        bond_token: Address,
+        governor: Address,
+        refund_grace_ledgers: u32,
+        max_lock_ledgers: u32,
+    ) {
+        Self::require_admin(&env, &admin);
+        Self::validate_lock_window(&env, refund_grace_ledgers, max_lock_ledgers);
+
+        let storage = env.storage().instance();
+        storage.set(&DataKey::BondToken, &bond_token);
+        storage.set(&DataKey::Governor, &governor);
+        storage.set(&DataKey::RefundGraceLedgers, &refund_grace_ledgers);
+        storage.set(&DataKey::MaxLockLedgers, &max_lock_ledgers);
+
+        events::emit_settings_updated(
+            &env,
+            &admin,
+            &bond_token,
+            &governor,
+            refund_grace_ledgers,
+            max_lock_ledgers,
+        );
+    }
+
+    /// Admin-only: hand the admin role to `new_admin`. Takes effect
+    /// immediately; `admin` loses the role in the same call.
+    pub fn set_admin(env: Env, admin: Address, new_admin: Address) {
+        Self::require_admin(&env, &admin);
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        events::emit_admin_updated(&env, &admin, &new_admin);
     }
 
     /// Read-only settings snapshot — lets callers (e.g. the frontend) work

@@ -7,15 +7,19 @@ without relying on one guardian key.
 
 ## Deployment and initialization
 
-Deploy `contracts/guardian-council`, then call:
+Deploy `contracts/guardian-council` with its constructor argument `deployer`
+set to the trusted deployment account. The deploy transaction stores this
+address before any separate initialization transaction can execute. Then call:
 
 ```text
-initialize(members, threshold, governor, action_ttl_ledgers)
+initialize(deployer, members, threshold, governor, action_ttl_ledgers)
 ```
 
 `members` must be non-empty and contain no duplicates. `threshold` must be at
 least one and no greater than the member count. The council stores the
-Governor address and rejects all actions from non-members.
+Governor address and rejects all actions from non-members. `deployer` must
+match the constructor address and authorize initialization. Deploying without
+the constructor argument or using a different initializer is invalid.
 
 After initialization, set the council contract address as the Governor's
 guardian. The council's calls to `pause`, `unpause`, `cancel`, and

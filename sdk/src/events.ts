@@ -1890,3 +1890,544 @@ export function subscribeToRewardClaimed(address: string, callback: (event: Soro
 export function subscribeToPoolFunded(address: string, callback: (event: SorobanEvent) => void, opts: SubscriptionOptions): () => void {
   return createTopicSubscription(address, VOTING_REWARDS_TOPICS.poolFunded, callback, opts);
 }
+
+// ── Standalone governance and treasury contract events ───────────────────────
+// Event names are namespaced to avoid collisions with core governor/budget streams.
+// Soroban contracttype structs decode to snake_case objects; tuple values to arrays.
+function eventFields(value: unknown, fields: string[]): Record<string, unknown> | null {
+  if (isRecord(value)) return value;
+  if (Array.isArray(value) && value.length >= fields.length) {
+    return Object.fromEntries(fields.map((field, index) => [field, value[index]]));
+  }
+  return null;
+}
+
+export interface OptimisticProposalCreatedEventData { proposalId: bigint; proposer: string; challengeEndLedger: number }
+export function parseOptimisticProposalCreatedEvent(event: SorobanEvent): OptimisticProposalCreatedEventData | null {
+  if (event.topic[0] !== "ProposalCreated") return null;
+  const id = toBigInt(event.topic[1]);
+  if (id === null) return null;
+  const data = eventFields(event.value, ["proposer", "challenge_end_ledger"]);
+  if (!data) return null;
+  if (typeof data.proposer !== "string") return null;
+  const proposer = data.proposer;
+  const challengeEndLedger = toNumber(data.challenge_end_ledger);
+  if (challengeEndLedger === null || !Number.isFinite(challengeEndLedger)) return null;
+  return { proposalId: id, proposer, challengeEndLedger };
+}
+export function subscribeToOptimisticProposalCreated(
+  contractAddress: string,
+  callback: (event: OptimisticProposalCreatedEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "ProposalCreated", (event) => {
+    const parsed = parseOptimisticProposalCreatedEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface OptimisticObjectionCastEventData { proposalId: bigint; objector: string; weight: bigint; runningTotal: bigint }
+export function parseOptimisticObjectionCastEvent(event: SorobanEvent): OptimisticObjectionCastEventData | null {
+  if (event.topic[0] !== "ObjectionCast") return null;
+  const id = toBigInt(event.topic[1]);
+  if (id === null) return null;
+  const data = eventFields(event.value, ["objector", "weight", "running_total"]);
+  if (!data) return null;
+  if (typeof data.objector !== "string") return null;
+  const objector = data.objector;
+  const weight = toBigInt(data.weight);
+  if (weight === null) return null;
+  const runningTotal = toBigInt(data.running_total);
+  if (runningTotal === null) return null;
+  return { proposalId: id, objector, weight, runningTotal };
+}
+export function subscribeToOptimisticObjectionCast(
+  contractAddress: string,
+  callback: (event: OptimisticObjectionCastEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "ObjectionCast", (event) => {
+    const parsed = parseOptimisticObjectionCastEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface OptimisticProposalObjectedEventData { proposalId: bigint }
+export function parseOptimisticProposalObjectedEvent(event: SorobanEvent): OptimisticProposalObjectedEventData | null {
+  if (event.topic[0] !== "ProposalObjected") return null;
+  const id = toBigInt(event.topic[1]);
+  if (id === null) return null;
+  return { proposalId: id };
+}
+export function subscribeToOptimisticProposalObjected(
+  contractAddress: string,
+  callback: (event: OptimisticProposalObjectedEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "ProposalObjected", (event) => {
+    const parsed = parseOptimisticProposalObjectedEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface OptimisticProposalPassedEventData { proposalId: bigint }
+export function parseOptimisticProposalPassedEvent(event: SorobanEvent): OptimisticProposalPassedEventData | null {
+  if (event.topic[0] !== "ProposalPassed") return null;
+  const id = toBigInt(event.topic[1]);
+  if (id === null) return null;
+  return { proposalId: id };
+}
+export function subscribeToOptimisticProposalPassed(
+  contractAddress: string,
+  callback: (event: OptimisticProposalPassedEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "ProposalPassed", (event) => {
+    const parsed = parseOptimisticProposalPassedEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface OptimisticProposalExecutedEventData { proposalId: bigint }
+export function parseOptimisticProposalExecutedEvent(event: SorobanEvent): OptimisticProposalExecutedEventData | null {
+  if (event.topic[0] !== "ProposalExecuted") return null;
+  const id = toBigInt(event.topic[1]);
+  if (id === null) return null;
+  return { proposalId: id };
+}
+export function subscribeToOptimisticProposalExecuted(
+  contractAddress: string,
+  callback: (event: OptimisticProposalExecutedEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "ProposalExecuted", (event) => {
+    const parsed = parseOptimisticProposalExecutedEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface OptimisticProposalCancelledEventData { proposalId: bigint; caller: string }
+export function parseOptimisticProposalCancelledEvent(event: SorobanEvent): OptimisticProposalCancelledEventData | null {
+  if (event.topic[0] !== "ProposalCancelled") return null;
+  const id = toBigInt(event.topic[1]);
+  if (id === null) return null;
+  const data = eventFields(event.value, ["caller"]);
+  if (!data) return null;
+  if (typeof data.caller !== "string") return null;
+  const caller = data.caller;
+  return { proposalId: id, caller };
+}
+export function subscribeToOptimisticProposalCancelled(
+  contractAddress: string,
+  callback: (event: OptimisticProposalCancelledEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "ProposalCancelled", (event) => {
+    const parsed = parseOptimisticProposalCancelledEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface OptimisticProposalExpiredEventData { proposalId: bigint }
+export function parseOptimisticProposalExpiredEvent(event: SorobanEvent): OptimisticProposalExpiredEventData | null {
+  if (event.topic[0] !== "ProposalExpired") return null;
+  const id = toBigInt(event.topic[1]);
+  if (id === null) return null;
+  return { proposalId: id };
+}
+export function subscribeToOptimisticProposalExpired(
+  contractAddress: string,
+  callback: (event: OptimisticProposalExpiredEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "ProposalExpired", (event) => {
+    const parsed = parseOptimisticProposalExpiredEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface OptimisticConfigUpdatedEventData { challengeWindowLedgers: number; objectionThresholdBps: number; executionWindowLedgers: number }
+export function parseOptimisticConfigUpdatedEvent(event: SorobanEvent): OptimisticConfigUpdatedEventData | null {
+  if (event.topic[0] !== "ConfigUpdated") return null;
+  const data = eventFields(event.value, ["challenge_window_ledgers", "objection_threshold_bps", "execution_window_ledgers"]);
+  if (!data) return null;
+  const challengeWindowLedgers = toNumber(data.challenge_window_ledgers);
+  if (challengeWindowLedgers === null || !Number.isFinite(challengeWindowLedgers)) return null;
+  const objectionThresholdBps = toNumber(data.objection_threshold_bps);
+  if (objectionThresholdBps === null || !Number.isFinite(objectionThresholdBps)) return null;
+  const executionWindowLedgers = toNumber(data.execution_window_ledgers);
+  if (executionWindowLedgers === null || !Number.isFinite(executionWindowLedgers)) return null;
+  return { challengeWindowLedgers, objectionThresholdBps, executionWindowLedgers };
+}
+export function subscribeToOptimisticConfigUpdated(
+  contractAddress: string,
+  callback: (event: OptimisticConfigUpdatedEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "ConfigUpdated", (event) => {
+    const parsed = parseOptimisticConfigUpdatedEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface OptimisticBondConfigUpdatedEventData { amount: bigint; token: string }
+export function parseOptimisticBondConfigUpdatedEvent(event: SorobanEvent): OptimisticBondConfigUpdatedEventData | null {
+  if (event.topic[0] !== "BondConfigUpdated") return null;
+  const data = eventFields(event.value, ["amount", "token"]);
+  if (!data) return null;
+  const amount = toBigInt(data.amount);
+  if (amount === null) return null;
+  if (typeof data.token !== "string") return null;
+  const token = data.token;
+  return { amount, token };
+}
+export function subscribeToOptimisticBondConfigUpdated(
+  contractAddress: string,
+  callback: (event: OptimisticBondConfigUpdatedEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "BondConfigUpdated", (event) => {
+    const parsed = parseOptimisticBondConfigUpdatedEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface OptimisticAdminUpdatedEventData { oldAdmin: string; newAdmin: string }
+export function parseOptimisticAdminUpdatedEvent(event: SorobanEvent): OptimisticAdminUpdatedEventData | null {
+  if (event.topic[0] !== "AdminUpdated") return null;
+  const data = eventFields(event.value, ["old_admin", "new_admin"]);
+  if (!data) return null;
+  if (typeof data.old_admin !== "string") return null;
+  const oldAdmin = data.old_admin;
+  if (typeof data.new_admin !== "string") return null;
+  const newAdmin = data.new_admin;
+  return { oldAdmin, newAdmin };
+}
+export function subscribeToOptimisticAdminUpdated(
+  contractAddress: string,
+  callback: (event: OptimisticAdminUpdatedEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "AdminUpdated", (event) => {
+    const parsed = parseOptimisticAdminUpdatedEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface StrategyRegisteredEventData { strategyId: bigint; adapter: string; token: string }
+export function parseStrategyRegisteredEvent(event: SorobanEvent): StrategyRegisteredEventData | null {
+  if (event.topic[0] !== "StratReg") return null;
+  const data = eventFields(event.value, ["strategy_id", "adapter", "token"]);
+  if (!data) return null;
+  const strategyId = toBigInt(data.strategy_id);
+  if (strategyId === null) return null;
+  if (typeof data.adapter !== "string") return null;
+  const adapter = data.adapter;
+  if (typeof data.token !== "string") return null;
+  const token = data.token;
+  return { strategyId, adapter, token };
+}
+export function subscribeToStrategyRegistered(
+  contractAddress: string,
+  callback: (event: StrategyRegisteredEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "StratReg", (event) => {
+    const parsed = parseStrategyRegisteredEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface StrategyDeactivatedEventData { strategyId: bigint }
+export function parseStrategyDeactivatedEvent(event: SorobanEvent): StrategyDeactivatedEventData | null {
+  if (event.topic[0] !== "StratDeact") return null;
+  const data = eventFields(event.value, ["strategy_id"]);
+  if (!data) return null;
+  const strategyId = toBigInt(data.strategy_id);
+  if (strategyId === null) return null;
+  return { strategyId };
+}
+export function subscribeToStrategyDeactivated(
+  contractAddress: string,
+  callback: (event: StrategyDeactivatedEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "StratDeact", (event) => {
+    const parsed = parseStrategyDeactivatedEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface StrategyDepositedEventData { strategyId: bigint; amount: bigint }
+export function parseStrategyDepositedEvent(event: SorobanEvent): StrategyDepositedEventData | null {
+  if (event.topic[0] !== "Deposited") return null;
+  const data = eventFields(event.value, ["strategy_id", "amount"]);
+  if (!data) return null;
+  const strategyId = toBigInt(data.strategy_id);
+  if (strategyId === null) return null;
+  const amount = toBigInt(data.amount);
+  if (amount === null) return null;
+  return { strategyId, amount };
+}
+export function subscribeToStrategyDeposited(
+  contractAddress: string,
+  callback: (event: StrategyDepositedEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "Deposited", (event) => {
+    const parsed = parseStrategyDepositedEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface StrategyWithdrawalRequestedEventData { withdrawalId: bigint; strategyId: bigint; amount: bigint; claimableLedger: number }
+export function parseStrategyWithdrawalRequestedEvent(event: SorobanEvent): StrategyWithdrawalRequestedEventData | null {
+  if (event.topic[0] !== "WdrawReq") return null;
+  const data = eventFields(event.value, ["withdrawal_id", "strategy_id", "amount", "claimable_ledger"]);
+  if (!data) return null;
+  const withdrawalId = toBigInt(data.withdrawal_id);
+  if (withdrawalId === null) return null;
+  const strategyId = toBigInt(data.strategy_id);
+  if (strategyId === null) return null;
+  const amount = toBigInt(data.amount);
+  if (amount === null) return null;
+  const claimableLedger = toNumber(data.claimable_ledger);
+  if (claimableLedger === null || !Number.isFinite(claimableLedger)) return null;
+  return { withdrawalId, strategyId, amount, claimableLedger };
+}
+export function subscribeToStrategyWithdrawalRequested(
+  contractAddress: string,
+  callback: (event: StrategyWithdrawalRequestedEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "WdrawReq", (event) => {
+    const parsed = parseStrategyWithdrawalRequestedEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface StrategyWithdrawalClaimedEventData { withdrawalId: bigint; actualAmount: bigint }
+export function parseStrategyWithdrawalClaimedEvent(event: SorobanEvent): StrategyWithdrawalClaimedEventData | null {
+  if (event.topic[0] !== "WdrawClaim") return null;
+  const data = eventFields(event.value, ["withdrawal_id", "actual_amount"]);
+  if (!data) return null;
+  const withdrawalId = toBigInt(data.withdrawal_id);
+  if (withdrawalId === null) return null;
+  const actualAmount = toBigInt(data.actual_amount);
+  if (actualAmount === null) return null;
+  return { withdrawalId, actualAmount };
+}
+export function subscribeToStrategyWithdrawalClaimed(
+  contractAddress: string,
+  callback: (event: StrategyWithdrawalClaimedEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "WdrawClaim", (event) => {
+    const parsed = parseStrategyWithdrawalClaimedEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface BondLockedEventData { proposer: string; descriptionHash: unknown; amount: bigint }
+export function parseBondLockedEvent(event: SorobanEvent): BondLockedEventData | null {
+  if (event.topic[0] !== "BondLocked") return null;
+  const data = eventFields(event.value, ["description_hash", "amount"]);
+  if (!data) return null;
+  if (typeof event.topic[1] !== "string") return null;
+  const proposer = event.topic[1];
+  const descriptionHash = data.description_hash;
+  const amount = toBigInt(data.amount);
+  if (amount === null) return null;
+  return { proposer, descriptionHash, amount };
+}
+export function subscribeToBondLocked(
+  contractAddress: string,
+  callback: (event: BondLockedEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "BondLocked", (event) => {
+    const parsed = parseBondLockedEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface BondRefundedEventData { proposer: string; descriptionHash: unknown; amount: bigint }
+export function parseBondRefundedEvent(event: SorobanEvent): BondRefundedEventData | null {
+  if (event.topic[0] !== "BondRefunded") return null;
+  const data = eventFields(event.value, ["description_hash", "amount"]);
+  if (!data) return null;
+  if (typeof event.topic[1] !== "string") return null;
+  const proposer = event.topic[1];
+  const descriptionHash = data.description_hash;
+  const amount = toBigInt(data.amount);
+  if (amount === null) return null;
+  return { proposer, descriptionHash, amount };
+}
+export function subscribeToBondRefunded(
+  contractAddress: string,
+  callback: (event: BondRefundedEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "BondRefunded", (event) => {
+    const parsed = parseBondRefundedEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface BondSlashedEventData { proposer: string; descriptionHash: unknown; amount: bigint; recipient: string }
+export function parseBondSlashedEvent(event: SorobanEvent): BondSlashedEventData | null {
+  if (event.topic[0] !== "BondSlashed") return null;
+  const data = eventFields(event.value, ["description_hash", "amount", "recipient"]);
+  if (!data) return null;
+  if (typeof event.topic[1] !== "string") return null;
+  const proposer = event.topic[1];
+  const descriptionHash = data.description_hash;
+  const amount = toBigInt(data.amount);
+  if (amount === null) return null;
+  if (typeof data.recipient !== "string") return null;
+  const recipient = data.recipient;
+  return { proposer, descriptionHash, amount, recipient };
+}
+export function subscribeToBondSlashed(
+  contractAddress: string,
+  callback: (event: BondSlashedEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "BondSlashed", (event) => {
+    const parsed = parseBondSlashedEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface BondAmountUpdatedEventData { admin: string; oldAmount: bigint; newAmount: bigint }
+export function parseBondAmountUpdatedEvent(event: SorobanEvent): BondAmountUpdatedEventData | null {
+  if (event.topic[0] !== "BondAmountUpdated") return null;
+  const data = eventFields(event.value, ["old_amount", "new_amount"]);
+  if (!data) return null;
+  if (typeof event.topic[1] !== "string") return null;
+  const admin = event.topic[1];
+  const oldAmount = toBigInt(data.old_amount);
+  if (oldAmount === null) return null;
+  const newAmount = toBigInt(data.new_amount);
+  if (newAmount === null) return null;
+  return { admin, oldAmount, newAmount };
+}
+export function subscribeToBondAmountUpdated(
+  contractAddress: string,
+  callback: (event: BondAmountUpdatedEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "BondAmountUpdated", (event) => {
+    const parsed = parseBondAmountUpdatedEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface RecurringStreamCreatedEventData { streamId: bigint; recipient: string; amountPerInterval: bigint; intervalLedgers: number }
+export function parseRecurringStreamCreatedEvent(event: SorobanEvent): RecurringStreamCreatedEventData | null {
+  if (event.topic[0] !== "StrmCreated") return null;
+  const data = eventFields(event.value, ["stream_id", "recipient", "amount_per_interval", "interval_ledgers"]);
+  if (!data) return null;
+  const streamId = toBigInt(data.stream_id);
+  if (streamId === null) return null;
+  if (typeof data.recipient !== "string") return null;
+  const recipient = data.recipient;
+  const amountPerInterval = toBigInt(data.amount_per_interval);
+  if (amountPerInterval === null) return null;
+  const intervalLedgers = toNumber(data.interval_ledgers);
+  if (intervalLedgers === null || !Number.isFinite(intervalLedgers)) return null;
+  return { streamId, recipient, amountPerInterval, intervalLedgers };
+}
+export function subscribeToRecurringStreamCreated(
+  contractAddress: string,
+  callback: (event: RecurringStreamCreatedEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "StrmCreated", (event) => {
+    const parsed = parseRecurringStreamCreatedEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface RecurringStreamExecutedEventData { streamId: bigint; amount: bigint; executedAtLedger: number }
+export function parseRecurringStreamExecutedEvent(event: SorobanEvent): RecurringStreamExecutedEventData | null {
+  if (event.topic[0] !== "StrmExec") return null;
+  const data = eventFields(event.value, ["stream_id", "amount", "executed_at_ledger"]);
+  if (!data) return null;
+  const streamId = toBigInt(data.stream_id);
+  if (streamId === null) return null;
+  const amount = toBigInt(data.amount);
+  if (amount === null) return null;
+  const executedAtLedger = toNumber(data.executed_at_ledger);
+  if (executedAtLedger === null || !Number.isFinite(executedAtLedger)) return null;
+  return { streamId, amount, executedAtLedger };
+}
+export function subscribeToRecurringStreamExecuted(
+  contractAddress: string,
+  callback: (event: RecurringStreamExecutedEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "StrmExec", (event) => {
+    const parsed = parseRecurringStreamExecutedEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface RecurringStreamPausedEventData { streamId: bigint }
+export function parseRecurringStreamPausedEvent(event: SorobanEvent): RecurringStreamPausedEventData | null {
+  if (event.topic[0] !== "StrmPaused") return null;
+  const streamId = toBigInt(event.topic[1]);
+  if (streamId === null) return null;
+  return { streamId };
+}
+export function subscribeToRecurringStreamPaused(
+  contractAddress: string,
+  callback: (event: RecurringStreamPausedEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "StrmPaused", (event) => {
+    const parsed = parseRecurringStreamPausedEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface RecurringStreamResumedEventData { streamId: bigint }
+export function parseRecurringStreamResumedEvent(event: SorobanEvent): RecurringStreamResumedEventData | null {
+  if (event.topic[0] !== "StrmResumed") return null;
+  const streamId = toBigInt(event.topic[1]);
+  if (streamId === null) return null;
+  return { streamId };
+}
+export function subscribeToRecurringStreamResumed(
+  contractAddress: string,
+  callback: (event: RecurringStreamResumedEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "StrmResumed", (event) => {
+    const parsed = parseRecurringStreamResumedEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+
+export interface RecurringStreamCancelledEventData { streamId: bigint; totalStreamed: bigint }
+export function parseRecurringStreamCancelledEvent(event: SorobanEvent): RecurringStreamCancelledEventData | null {
+  if (event.topic[0] !== "StrmCancel") return null;
+  const data = eventFields(event.value, ["stream_id", "total_streamed"]);
+  if (!data) return null;
+  const streamId = toBigInt(data.stream_id);
+  if (streamId === null) return null;
+  const totalStreamed = toBigInt(data.total_streamed);
+  if (totalStreamed === null) return null;
+  return { streamId, totalStreamed };
+}
+export function subscribeToRecurringStreamCancelled(
+  contractAddress: string,
+  callback: (event: RecurringStreamCancelledEventData) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(contractAddress, "StrmCancel", (event) => {
+    const parsed = parseRecurringStreamCancelledEvent(event);
+    if (parsed) callback(parsed);
+  }, opts);
+}
+

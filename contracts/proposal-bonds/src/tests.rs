@@ -1,7 +1,7 @@
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger as _},
-    token, Env,
+    testutils::{Address as _, Events as _, Ledger as _},
+    token, Env, TryIntoVal,
 };
 
 #[contract]
@@ -68,6 +68,20 @@ const MAX_LOCK_LEDGERS: u32 = 1_000;
 /// Deploy a fresh SAC token, a mock governor, and an initialized
 /// proposal-bonds contract. Returns (client, token, proposer, governor_id).
 fn setup(env: &Env) -> (ProposalBondsContractClient<'static>, Address, Address, Address) {
+    let (client, token_addr, proposer, governor_id, _admin) = setup_with_admin(env);
+    (client, token_addr, proposer, governor_id)
+}
+
+/// Same as [`setup`], also returning the admin address.
+fn setup_with_admin(
+    env: &Env,
+) -> (
+    ProposalBondsContractClient<'static>,
+    Address,
+    Address,
+    Address,
+    Address,
+) {
     let admin = Address::generate(env);
     let proposer = Address::generate(env);
 
@@ -88,7 +102,7 @@ fn setup(env: &Env) -> (ProposalBondsContractClient<'static>, Address, Address, 
         &MAX_LOCK_LEDGERS,
     );
 
-    (client, token_addr, proposer, governor_id)
+    (client, token_addr, proposer, governor_id, admin)
 }
 
 fn hash(env: &Env, seed: u8) -> BytesN<32> {
@@ -433,4 +447,216 @@ fn test_get_settings_reflects_initialize_args() {
     assert_eq!(settings.governor, gov);
     assert_eq!(settings.refund_grace_ledgers, GRACE_LEDGERS);
     assert_eq!(settings.max_lock_ledgers, MAX_LOCK_LEDGERS);
+}
+
+// ── #1537: update_settings / set_admin ──────────────────────────────────────
+
+fn last_event_topic(env: &Env) -> Symbol {
+    env.events()
+        .all()
+        .last()
+        .unwrap()
+        .1
+        .get(0)
+        .unwrap()
+        .try_into_val(env)
+        .unwrap()
+}
+
+#[test]
+fn test_update_settings_by_admin_replaces_settings_and_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _token, _proposer, _gov, admin) = setup_with_admin(&env);
+
+    let new_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let new_governor = env.register(MockGovernorContract, ());
+    client.update_settings(&admin, &new_token, &new_governor, &50u32, &2_000u32);
+    assert_eq!(last_event_topic(&env), Symbol::new(&env, "SettingsUpdated"));
+
+    assert_eq!(
+        client.get_settings(),
+        BondSettings {
+            bond_token: new_token,
+            bond_amount: BOND_AMOUNT,
+            governor: new_governor,
+            refund_grace_ledgers: 50,
+            max_lock_ledgers: 2_000,
+        }
+    );
+}
+
+#[test]
+fn test_update_settings_by_non_admin_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, token_addr, _proposer, gov, _admin) = setup_with_admin(&env);
+    let attacker = Address::generate(&env);
+
+    assert_eq!(
+        client.try_update_settings(
+            &attacker,
+            &token_addr,
+            &gov,
+            &GRACE_LEDGERS,
+            &MAX_LOCK_LEDGERS
+        ),
+        Err(Ok(ProposalBondsError::NotAuthorized.into())),
+    );
+}
+
+#[test]
+fn test_update_settings_rejects_unsafe_lock_windows() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, token_addr, _proposer, gov, admin) = setup_with_admin(&env);
+
+    for (grace, max_lock) in [
+        (GRACE_LEDGERS, 0),
+        (GRACE_LEDGERS, GRACE_LEDGERS),
+        (GRACE_LEDGERS, GRACE_LEDGERS - 1),
+        (GRACE_LEDGERS, BOND_TTL_LEDGERS + 1),
+    ] {
+        assert_eq!(
+            client.try_update_settings(&admin, &token_addr, &gov, &grace, &max_lock),
+            Err(Ok(ProposalBondsError::InvalidLockWindow.into())),
+            "grace {} / max lock {}",
+            grace,
+            max_lock,
+        );
+    }
+
+    // The bond entry's TTL bump itself is still a valid upper bound.
+    client.update_settings(&admin, &token_addr, &gov, &GRACE_LEDGERS, &BOND_TTL_LEDGERS);
+    assert_eq!(client.get_settings().max_lock_ledgers, BOND_TTL_LEDGERS);
+}
+
+#[test]
+fn test_refund_queries_the_updated_governor() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, token_addr, proposer, _old_gov, admin) = setup_with_admin(&env);
+    let tok = token::TokenClient::new(&env, &token_addr);
+    let h = hash(&env, 1);
+    client.lock_bond(&proposer, &h);
+
+    // The old governor knows nothing about proposal 1; only the new one does.
+    let new_gov = env.register(MockGovernorContract, ());
+    let new_gov_client = MockGovernorContractClient::new(&env, &new_gov);
+    new_gov_client.set_proposal(&1u64, &h);
+    new_gov_client.set_state(&1u64, &ProposalState::Defeated);
+    client.update_settings(
+        &admin,
+        &token_addr,
+        &new_gov,
+        &GRACE_LEDGERS,
+        &MAX_LOCK_LEDGERS,
+    );
+
+    env.ledger()
+        .with_mut(|l| l.sequence_number += GRACE_LEDGERS + 1);
+    let before = tok.balance(&proposer);
+    client.refund_bond(&proposer, &h, &1u64);
+    assert_eq!(tok.balance(&proposer), before + BOND_AMOUNT);
+}
+
+#[test]
+fn test_slash_accepts_only_the_updated_governor() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, token_addr, proposer, old_gov, admin) = setup_with_admin(&env);
+    let h = hash(&env, 1);
+    client.lock_bond(&proposer, &h);
+
+    let new_gov = env.register(MockGovernorContract, ());
+    client.update_settings(
+        &admin,
+        &token_addr,
+        &new_gov,
+        &GRACE_LEDGERS,
+        &MAX_LOCK_LEDGERS,
+    );
+
+    let recipient = Address::generate(&env);
+    assert_eq!(
+        client.try_slash(&old_gov, &h, &recipient),
+        Err(Ok(ProposalBondsError::NotAuthorized.into())),
+    );
+    client.slash(&new_gov, &h, &recipient);
+    assert_eq!(
+        token::TokenClient::new(&env, &token_addr).balance(&recipient),
+        BOND_AMOUNT
+    );
+}
+
+#[test]
+fn test_bond_token_change_keeps_locked_bonds_in_their_own_token() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, old_token, proposer, gov, admin) = setup_with_admin(&env);
+    let old_tok = token::TokenClient::new(&env, &old_token);
+    let h_old = hash(&env, 1);
+    client.lock_bond(&proposer, &h_old);
+
+    let new_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let new_tok = token::TokenClient::new(&env, &new_token);
+    token::StellarAssetClient::new(&env, &new_token).mint(&proposer, &BOND_AMOUNT);
+    client.update_settings(&admin, &new_token, &gov, &GRACE_LEDGERS, &MAX_LOCK_LEDGERS);
+
+    // A bond locked after the change is posted in the new token.
+    let h_new = hash(&env, 2);
+    client.lock_bond(&proposer, &h_new);
+    assert_eq!(new_tok.balance(&client.address), BOND_AMOUNT);
+
+    // The earlier bond is still refunded in the token it was locked in, and
+    // the new-token bond's funds are left alone.
+    let old_before = old_tok.balance(&proposer);
+    env.ledger()
+        .with_mut(|l| l.sequence_number += MAX_LOCK_LEDGERS + 1);
+    client.refund_bond(&proposer, &h_old, &1u64);
+    assert_eq!(old_tok.balance(&proposer), old_before + BOND_AMOUNT);
+    assert_eq!(old_tok.balance(&client.address), 0);
+    assert_eq!(new_tok.balance(&client.address), BOND_AMOUNT);
+
+    // Slashing the new bond pays out in the new token.
+    let recipient = Address::generate(&env);
+    client.slash(&gov, &h_new, &recipient);
+    assert_eq!(new_tok.balance(&recipient), BOND_AMOUNT);
+}
+
+#[test]
+fn test_set_admin_rotates_admin_and_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, token_addr, _proposer, gov, admin) = setup_with_admin(&env);
+    let next = Address::generate(&env);
+
+    client.set_admin(&admin, &next);
+    assert_eq!(last_event_topic(&env), Symbol::new(&env, "AdminUpdated"));
+
+    // The old admin has lost the role; the new one has it.
+    assert_eq!(
+        client.try_update_bond_amount(&admin, &2_000i128),
+        Err(Ok(ProposalBondsError::NotAuthorized.into())),
+    );
+    client.update_bond_amount(&next, &2_000i128);
+    client.update_settings(&next, &token_addr, &gov, &GRACE_LEDGERS, &MAX_LOCK_LEDGERS);
+    assert_eq!(client.get_settings().bond_amount, 2_000);
+}
+
+#[test]
+fn test_set_admin_by_non_admin_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _token, _proposer, _gov) = setup(&env);
+    let attacker = Address::generate(&env);
+
+    assert_eq!(
+        client.try_set_admin(&attacker, &attacker),
+        Err(Ok(ProposalBondsError::NotAuthorized.into())),
+    );
 }

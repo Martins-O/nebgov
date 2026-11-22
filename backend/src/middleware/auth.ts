@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
+import { requireJwtSecret } from "../config";
 
 export interface AuthRequest extends Request {
   userId?: number;
@@ -18,7 +19,7 @@ export const authenticate = (
       return res.status(401).json({ error: "Authentication required" });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as {
+    const decoded = jwt.verify(token, requireJwtSecret()) as {
       userId: number;
       walletAddress: string;
     };

@@ -57,19 +57,18 @@ fn setup(threshold: u32, ttl: u32) -> Setup {
     env.mock_all_auths();
 
     let governor_id = env.register(MockGovernor, ());
-    let council_id = env.register(GuardianCouncilContract, ());
-    let council = GuardianCouncilContractClient::new(&env, &council_id);
-
     let m = [
         Address::generate(&env),
         Address::generate(&env),
         Address::generate(&env),
     ];
+    let council_id = env.register(GuardianCouncilContract, (m[0].clone(),));
+    let council = GuardianCouncilContractClient::new(&env, &council_id);
     let mut members = Vec::new(&env);
     for a in &m {
         members.push_back(a.clone());
     }
-    council.initialize(&members, &threshold, &governor_id, &ttl);
+    council.initialize(&m[0], &members, &threshold, &governor_id, &ttl);
 
     Setup {
         env,
@@ -77,6 +76,29 @@ fn setup(threshold: u32, ttl: u32) -> Setup {
         governor_id,
         m,
     }
+}
+
+#[test]
+fn initialize_requires_deployer_authorization() {
+    let env = Env::default();
+    let governor = env.register(MockGovernor, ());
+    let deployer = Address::generate(&env);
+    let council_id = env.register(GuardianCouncilContract, (deployer.clone(),));
+    let council = GuardianCouncilContractClient::new(&env, &council_id);
+    let member = Address::generate(&env);
+    let mut members = Vec::new(&env);
+    members.push_back(member);
+
+    assert!(council
+        .try_initialize(&deployer, &members, &1u32, &governor, &0u32)
+        .is_err());
+
+    env.mock_all_auths();
+    let other = Address::generate(&env);
+    assert!(council
+        .try_initialize(&other, &members, &1u32, &governor, &0u32)
+        .is_err());
+    council.initialize(&deployer, &members, &1u32, &governor, &0u32);
 }
 
 fn mock_governor(env: &Env, id: &Address) -> MockGovernorClient<'static> {
@@ -292,15 +314,14 @@ fn initialize_rejects_bad_threshold_and_duplicate_members() {
     let env = Env::default();
     env.mock_all_auths();
     let governor_id = env.register(MockGovernor, ());
-    let council_id = env.register(GuardianCouncilContract, ());
-    let council = GuardianCouncilContractClient::new(&env, &council_id);
-
     let a = Address::generate(&env);
+    let council_id = env.register(GuardianCouncilContract, (a.clone(),));
+    let council = GuardianCouncilContractClient::new(&env, &council_id);
     let mut dupes = Vec::new(&env);
     dupes.push_back(a.clone());
     dupes.push_back(a.clone());
     let e = council
-        .try_initialize(&dupes, &1u32, &governor_id, &0u32)
+        .try_initialize(&a, &dupes, &1u32, &governor_id, &0u32)
         .unwrap_err()
         .unwrap();
     assert_eq!(e, GuardianCouncilError::DuplicateMember.into());
@@ -308,7 +329,7 @@ fn initialize_rejects_bad_threshold_and_duplicate_members() {
     let mut one = Vec::new(&env);
     one.push_back(a.clone());
     let e2 = council
-        .try_initialize(&one, &5u32, &governor_id, &0u32)
+        .try_initialize(&a, &one, &5u32, &governor_id, &0u32)
         .unwrap_err()
         .unwrap();
     assert_eq!(e2, GuardianCouncilError::InvalidThreshold.into());

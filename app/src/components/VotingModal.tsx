@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Keypair } from "@stellar/stellar-sdk";
 import toast from "react-hot-toast";
 import { GovernorClient, VoteSupport, VoteType, computeQuadraticWeight, type Network } from "@nebgov/sdk";
 import { useWallet } from "../lib/wallet-context";
@@ -43,27 +42,6 @@ function getGovernorClientFromEnv(): GovernorClient {
   });
 }
 
-function getVoteSigner(): Keypair {
-  const secret =
-    process.env.NEXT_PUBLIC_VOTE_SIGNER_SECRET_KEY ||
-    process.env.NEXT_PUBLIC_DELEGATE_SECRET_KEY;
-  if (!secret) {
-    throw new Error(
-      "Missing NEXT_PUBLIC_VOTE_SIGNER_SECRET_KEY (or NEXT_PUBLIC_DELEGATE_SECRET_KEY) in .env.local",
-    );
-  }
-  return Keypair.fromSecret(secret);
-}
-
-function explorerTxUrl(txHash: string): string {
-  const network = process.env.NEXT_PUBLIC_NETWORK || "testnet";
-  const base =
-    network === "mainnet"
-      ? "https://stellar.expert/explorer/public"
-      : "https://stellar.expert/explorer/testnet";
-  return `${base}/tx/${txHash}`;
-}
-
 export function VotingModal({
   open,
   isOpen,
@@ -78,7 +56,7 @@ export function VotingModal({
   voteType,
   governorClient,
 }: Props) {
-  const { isConnected, connect, publicKey } = useWallet();
+  const { isConnected, connect, publicKey, signTransaction } = useWallet();
   const { divisor } = useGovernorConfig();
   const resolvedOpen = open ?? isOpen ?? false;
   const resolvedProposalId = typeof proposalId === "bigint" ? proposalId : BigInt(proposalId);
@@ -107,9 +85,8 @@ export function VotingModal({
       setEstimatingFee(true);
       try {
         const client = governorClient ?? getGovernorClientFromEnv();
-        const signer = getVoteSigner();
         const result = await client.estimateVoteGas(
-          signer.publicKey(),
+          resolvedDelegatee,
           resolvedProposalId,
           support,
         );
@@ -216,15 +193,17 @@ export function VotingModal({
     setSubmitting(true);
     try {
       const client = getGovernorClientFromEnv();
-      const signer = getVoteSigner();
-      const txHash = await client.castVote(signer, resolvedProposalId, support);
+      if (!signTransaction) {
+        throw new Error("Connect your wallet to sign the vote.");
+      }
+      await client.castVoteWithSign(
+        publicKey,
+        resolvedProposalId,
+        support,
+        signTransaction,
+      );
       toast.success(
-        <div>
-          Vote submitted!{" "}
-          <a href={explorerTxUrl(txHash)} target="_blank" rel="noreferrer" className="underline">
-            View on Explorer →
-          </a>
-        </div>,
+        "Vote submitted!",
         { duration: 8000 },
       );
       onVoted?.();

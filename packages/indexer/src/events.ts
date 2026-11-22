@@ -65,8 +65,10 @@ const TOPIC_MAP: Record<string, string> = {
 export interface IndexerConfig {
   rpcUrl: string;
   governorAddress: string;
+  governorFactoryAddress?: string;
   wrapperAddress?: string;
   treasuryAddress?: string;
+  votingRewardsAddress?: string;
   liquidityAddress?: string;
   coSponsorshipAddress?: string;
   proposalBondsAddress?: string;
@@ -104,8 +106,12 @@ export async function processEvents(
 
   try {
     const contractIds = [config.governorAddress].filter(Boolean);
+    if (config.governorFactoryAddress)
+      contractIds.push(config.governorFactoryAddress);
     if (config.wrapperAddress) contractIds.push(config.wrapperAddress);
     if (config.treasuryAddress) contractIds.push(config.treasuryAddress);
+    if (config.votingRewardsAddress)
+      contractIds.push(config.votingRewardsAddress);
     if (config.liquidityAddress) contractIds.push(config.liquidityAddress);
     if (config.coSponsorshipAddress) contractIds.push(config.coSponsorshipAddress);
     if (config.proposalBondsAddress) contractIds.push(config.proposalBondsAddress);
@@ -143,10 +149,20 @@ export async function processEvents(
         config.wrapperAddress &&
         contractId === config.wrapperAddress
       );
+      const isGovernorFactory = !!(
+        contractId &&
+        config.governorFactoryAddress &&
+        contractId === config.governorFactoryAddress
+      );
       const isTreasury = !!(
         contractId &&
         config.treasuryAddress &&
         contractId === config.treasuryAddress
+      );
+      const isVotingRewards = !!(
+        contractId &&
+        config.votingRewardsAddress &&
+        contractId === config.votingRewardsAddress
       );
       const isLiquidity = !!(
         contractId &&
@@ -210,7 +226,9 @@ export async function processEvents(
       }
 
       try {
-        if (isConvictionVoting) {
+        if (isVotingRewards) {
+          await handleVotingRewardsEvent(event, eventType, topics);
+        } else if (isConvictionVoting) {
           await handleConvictionEvent(event, eventType, topics);
         } else if (isTreasury) {
           switch (eventType) {
@@ -1453,6 +1471,161 @@ async function handleResultAnchored(
   });
 }
 
+async function handleVotingRewardsEvent(
+  event: SorobanRpc.Api.EventResponse,
+  eventType: string,
+  topics: unknown[],
+): Promise<void> {
+  const raw = scValToNative(event.value) as unknown;
+  const values = Array.isArray(raw) ? raw : [raw];
+
+  switch (eventType) {
+    case "EpochStarted": {
+      const epochId = String(topics[1] ?? "");
+      if (values.length !== 2 || !epochId || epochId === "undefined") {
+        throw new Error(
+          "EpochStarted expected epoch_id, start_ledger, and end_ledger",
+        );
+      }
+      const startLedger = Number(values[0]);
+      const endLedger = Number(values[1]);
+      await pool.query(
+        `INSERT INTO reward_epochs
+           (epoch_id, start_ledger, end_ledger, total_reward_amount, total_claimed,
+            swept_amount, started_ledger, updated_ledger)
+         VALUES ($1, $2, $3, 0, 0, 0, $4, $4)
+         ON CONFLICT (epoch_id) DO NOTHING`,
+        [epochId, startLedger, endLedger, event.ledger],
+      );
+      invalidatePattern("voting-rewards:");
+      broadcast({
+        type: "reward_epoch_started",
+        data: { epoch_id: epochId, start_ledger: startLedger, end_ledger: endLedger },
+      });
+      break;
+    }
+    case "EpochRootPublished": {
+      const epochId = String(topics[1] ?? "");
+      if (values.length !== 2 || !epochId || epochId === "undefined") {
+        throw new Error(
+          "EpochRootPublished expected epoch_id, merkle_root, and total_reward_amount",
+        );
+      }
+      const merkleRoot = Buffer.from(values[0] as Uint8Array).toString("hex");
+      const totalRewardAmount = String(values[1]);
+      await pool.query(
+        `UPDATE reward_epochs
+         SET merkle_root = $2, total_reward_amount = $3,
+             root_published_ledger = $4, updated_ledger = $4
+         WHERE epoch_id = $1`,
+        [epochId, merkleRoot, totalRewardAmount, event.ledger],
+      );
+      invalidatePattern("voting-rewards:");
+      broadcast({
+        type: "reward_epoch_root_published",
+        data: {
+          epoch_id: epochId,
+          merkle_root: merkleRoot,
+          total_reward_amount: totalRewardAmount,
+        },
+      });
+      break;
+    }
+    case "RewardClaimed": {
+      if (values.length !== 2) {
+        throw new Error("RewardClaimed expected epoch_id and amount");
+      }
+      const epochId = String(values[0]);
+      const claimant = String(topics[1] ?? "");
+      const amount = String(values[1]);
+      if (!claimant || claimant === "undefined") {
+        throw new Error("RewardClaimed is missing claimant");
+      }
+      const inserted = await pool.query(
+        `INSERT INTO reward_claims
+           (event_id, epoch_id, claimant, amount, ledger, transaction_hash)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (event_id) DO NOTHING
+         RETURNING event_id`,
+        [
+          event.id,
+          epochId,
+          claimant,
+          amount,
+          event.ledger,
+          event.txHash ?? null,
+        ],
+      );
+      if (inserted.rowCount) {
+        await pool.query(
+          `UPDATE reward_epochs
+           SET total_claimed = total_claimed + $2, updated_ledger = $3
+           WHERE epoch_id = $1`,
+          [epochId, amount, event.ledger],
+        );
+      }
+      invalidatePattern("voting-rewards:");
+      broadcast({
+        type: "reward_claimed",
+        data: { epoch_id: epochId, claimant, amount, ledger: event.ledger },
+      });
+      break;
+    }
+    case "PoolFunded": {
+      const funder = String(topics[1] ?? "");
+      if (
+        values.length !== 1 ||
+        values[0] === undefined ||
+        !funder ||
+        funder === "undefined"
+      ) {
+        throw new Error("PoolFunded expected funder and amount");
+      }
+      const amount = String(values[0]);
+      const inserted = await pool.query(
+        `INSERT INTO reward_pool_fundings
+           (event_id, funder, amount, ledger, transaction_hash)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (event_id) DO NOTHING
+         RETURNING event_id`,
+        [event.id, funder, amount, event.ledger, event.txHash ?? null],
+      );
+      if (inserted.rowCount) {
+        invalidatePattern("voting-rewards:");
+        broadcast({
+          type: "reward_pool_funded",
+          data: { funder, amount, ledger: event.ledger },
+        });
+      }
+      break;
+    }
+    case "EpochSwept": {
+      const epochId = String(topics[1] ?? "");
+      if (
+        values.length !== 1 ||
+        values[0] === undefined ||
+        !epochId ||
+        epochId === "undefined"
+      ) {
+        throw new Error("EpochSwept expected epoch_id and unclaimed_amount");
+      }
+      const sweptAmount = String(values[0]);
+      await pool.query(
+        `UPDATE reward_epochs
+         SET swept_amount = $2, swept_ledger = $3, updated_ledger = $3
+         WHERE epoch_id = $1`,
+        [epochId, sweptAmount, event.ledger],
+      );
+      invalidatePattern("voting-rewards:");
+      broadcast({
+        type: "reward_epoch_swept",
+        data: { epoch_id: epochId, swept_amount: sweptAmount, ledger: event.ledger },
+      });
+      break;
+    }
+  }
+}
+
 async function handleStrategyRegistered(
   event: SorobanRpc.Api.EventResponse,
   topics: unknown[],
@@ -1566,6 +1739,34 @@ async function handleStrategyWithdrawalClaimed(
   broadcast({
     type: "strategy_withdrawal_claimed",
     data: { withdrawal_id: withdrawalId, actual_amount: actualAmount, ledger: event.ledger },
+  });
+}
+
+/**
+ * `contracts/treasury-streams` events. Every one of them is already persisted
+ * to `event_log` above; there is no projection table for these streams (the
+ * `treasury_streams` table belongs to `contracts/treasury` budget streams, a
+ * different id space). `StrmCompleted` is also broadcast, so subscribers learn
+ * that a stream has paid its last interval and dropped out of
+ * `get_active_streams`.
+ */
+function handleTreasuryStreamsEvent(
+  event: SorobanRpc.Api.EventResponse,
+  eventType: string,
+  topics: unknown[],
+): void {
+  if (eventType !== "StrmCompleted") return;
+  const raw = scValToNative(event.value) as unknown;
+  const data = (raw && typeof raw === "object" && !Array.isArray(raw)
+    ? raw
+    : {}) as Record<string, unknown>;
+  broadcast({
+    type: "treasury_stream_completed",
+    data: {
+      stream_id: String(data.stream_id ?? topics[1]),
+      total_streamed: String(data.total_streamed ?? 0),
+      ledger: event.ledger,
+    },
   });
 }
 

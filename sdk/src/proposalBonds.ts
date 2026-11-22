@@ -267,6 +267,45 @@ export class ProposalBondsClient {
     return Buffer.from(args.toXDR());
   }
 
+  /**
+   * Admin-only: replace the bond token, governor, `RefundGraceLedgers` and
+   * `MaxLockLedgers`. Bonds already locked keep the token they were locked
+   * in; the refund windows apply to them too. `maxLockLedgers` must be
+   * non-zero, greater than `refundGraceLedgers`, and at most the contract's
+   * bond TTL. Returns the tx hash.
+   */
+  async updateSettings(
+    admin: Keypair,
+    settings: {
+      bondToken: string;
+      governor: string;
+      refundGraceLedgers: number;
+      maxLockLedgers: number;
+    },
+  ): Promise<string> {
+    const { hash } = await this.submit(
+      admin,
+      "update_settings",
+      nativeToScVal(admin.publicKey(), { type: "address" }),
+      nativeToScVal(settings.bondToken, { type: "address" }),
+      nativeToScVal(settings.governor, { type: "address" }),
+      nativeToScVal(settings.refundGraceLedgers, { type: "u32" }),
+      nativeToScVal(settings.maxLockLedgers, { type: "u32" }),
+    );
+    return hash;
+  }
+
+  /** Admin-only: hand the admin role to `newAdmin`, effective immediately. Returns the tx hash. */
+  async setAdmin(admin: Keypair, newAdmin: string): Promise<string> {
+    const { hash } = await this.submit(
+      admin,
+      "set_admin",
+      nativeToScVal(admin.publicKey(), { type: "address" }),
+      nativeToScVal(newAdmin, { type: "address" }),
+    );
+    return hash;
+  }
+
   /** Get a bond by description hash, or `null` if none has been locked. */
   async getBond(descriptionHash: string): Promise<ProposalBond | null> {
     return this.retry(async () => {

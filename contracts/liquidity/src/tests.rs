@@ -1135,3 +1135,42 @@ fn test_get_amount_out_invalid_amount_panics() {
     setup_pool(&client, &governor, 0, 1, &token_a, &token_b);
     client.get_amount_out(&0, &1, &0);
 }
+
+#[test]
+fn test_instance_ttl_extended_on_calls() {
+    let (env, contract_id, _governor, _, _, _token_a, _token_b) = setup_liquidity();
+
+    // initialize bumps the instance entry well past the default instance TTL.
+    let ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+    assert!(ttl >= crate::INSTANCE_TTL_THRESHOLD);
+    assert_eq!(ttl, crate::INSTANCE_EXTEND_TTL);
+}
+
+#[test]
+fn test_instance_ttl_extended_contract_still_answers() {
+    let (env, contract_id, governor, provider, trader, token_a, token_b) = setup_liquidity();
+    let client = LiquidityContractClient::new(&env, &contract_id);
+
+    setup_pool(&client, &governor, 0, 1, &token_a, &token_b);
+    client.add_liquidity(&provider, &0, &1, &10_000, &10_000, &0);
+
+    // Advance the ledger past the default instance TTL.
+    env.ledger().with_mut(|l| {
+        l.sequence_number += 10_000;
+    });
+
+    // View functions still answer.
+    assert_eq!(client.governor(), governor);
+    let pool = client.get_pool(&0, &1);
+    assert_eq!(pool.reserve_a, 10_000);
+    assert_eq!(client.get_lp_position(&provider, &0, &1), 10_000);
+
+    // State-changing calls still work and re-extend the instance TTL.
+    let amount_out = client.swap(&trader, &0, &1, &1_000, &0);
+    assert!(amount_out > 0);
+    client.update_pool_fee(&governor, &0, &1, &50);
+    assert_eq!(client.get_pool(&0, &1).fee_bps, 50);
+
+    let ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+    assert!(ttl >= crate::INSTANCE_TTL_THRESHOLD);
+}

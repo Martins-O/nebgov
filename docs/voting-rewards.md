@@ -109,7 +109,8 @@ Publish the Merkle root and reward allocation for an ended epoch.
 - `total_reward_amount` must not exceed the available pool
 
 **Effect:**
-- Locks the epoch's merkle_root
+- Locks the epoch's merkle_root and marks the epoch finalized, including when `total_reward_amount` is `0` (an epoch
+  with no voters is still final, so its root can't be replaced)
 - Allocates `total_reward_amount` from the pool
 - Emits `EpochRootPublished` event
 

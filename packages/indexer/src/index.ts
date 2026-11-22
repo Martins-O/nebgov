@@ -17,6 +17,8 @@ import { bootstrapTreasuryProjection } from "./treasuryProjection";
 dotenv.config();
 
 const GOVERNOR_ADDRESS = process.env.GOVERNOR_ADDRESS ?? "";
+const GOVERNOR_FACTORY_ADDRESS =
+  process.env.GOVERNOR_FACTORY_ADDRESS ?? process.env.FACTORY_ADDRESS ?? "";
 const WRAPPER_ADDRESS = process.env.WRAPPER_ADDRESS ?? "";
 const TREASURY_ADDRESS = process.env.TREASURY_ADDRESS ?? "";
 const LIQUIDITY_ADDRESS = process.env.LIQUIDITY_ADDRESS ?? "";
@@ -43,6 +45,7 @@ const PORT = Number(process.env.PORT ?? 3001);
 
 export const INDEXED_CONTRACTS = {
   GOVERNOR_ADDRESS,
+  GOVERNOR_FACTORY_ADDRESS,
   WRAPPER_ADDRESS,
   TREASURY_ADDRESS,
   LIQUIDITY_ADDRESS,
@@ -113,6 +116,7 @@ async function runIndexer(): Promise<void> {
   const config = {
     rpcUrl: RPC_URL,
     governorAddress: GOVERNOR_ADDRESS,
+    governorFactoryAddress: GOVERNOR_FACTORY_ADDRESS,
     wrapperAddress: WRAPPER_ADDRESS,
     treasuryAddress: TREASURY_ADDRESS,
     liquidityAddress: LIQUIDITY_ADDRESS,

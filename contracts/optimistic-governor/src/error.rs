@@ -21,4 +21,10 @@ pub enum OptimisticGovernorError {
     ArithmeticOverflow = 15,
     ProposalNotCancellable = 16,
     ProposalExpired = 17,
+    /// No proposer bond is held for this proposal (none was taken, or it has
+    /// already been refunded, released or slashed).
+    BondNotFound = 18,
+    /// The bond is only at risk once the proposal has been objected; it can
+    /// not be released or slashed before that.
+    BondNotSettleable = 19,
 }

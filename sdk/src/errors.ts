@@ -850,6 +850,8 @@ export enum ProposalBondsErrorCode {
   ProposalNotTerminal = 7,
   RefundGraceNotElapsed = 8,
   NotAuthorized = 9,
+  InvalidBondAmount = 10,
+  InvalidLockWindow = 11,
 
   // SDK-level codes
   SimulationFailed = 100,
@@ -872,6 +874,8 @@ const PROPOSAL_BONDS_MESSAGES: Record<ProposalBondsErrorCode, string> = {
   [ProposalBondsErrorCode.RefundGraceNotElapsed]:
     "The post-terminal refund grace window has not elapsed yet",
   [ProposalBondsErrorCode.NotAuthorized]: "Caller is not authorized to perform this action",
+  [ProposalBondsErrorCode.InvalidBondAmount]: "Bond amount must be positive",
+  [ProposalBondsErrorCode.InvalidLockWindow]: "Lock window must exceed grace period and be shorter than bond storage lifetime",
   [ProposalBondsErrorCode.SimulationFailed]: "Simulation failed",
   [ProposalBondsErrorCode.TransactionFailed]: "Transaction failed",
   [ProposalBondsErrorCode.TransactionTimeout]: "Transaction timed out",
@@ -1156,6 +1160,8 @@ export enum OptimisticGovernorErrorCode {
   Unauthorized = 14,
   ArithmeticOverflow = 15,
   ProposalNotCancellable = 16,
+  BondNotFound = 18,
+  BondNotSettleable = 19,
 
   // SDK-level codes
   SimulationFailed = 100,
@@ -1180,6 +1186,9 @@ const OPTIMISTIC_GOVERNOR_MESSAGES: Record<OptimisticGovernorErrorCode, string> 
   [OptimisticGovernorErrorCode.Unauthorized]: "Caller is not authorized to perform this action",
   [OptimisticGovernorErrorCode.ArithmeticOverflow]: "Arithmetic overflow in objection calculation",
   [OptimisticGovernorErrorCode.ProposalNotCancellable]: "Proposal cannot be cancelled in its current state",
+  [OptimisticGovernorErrorCode.BondNotFound]: "No proposer bond is held for this proposal",
+  [OptimisticGovernorErrorCode.BondNotSettleable]:
+    "The bond can only be released or slashed after the proposal was objected",
   [OptimisticGovernorErrorCode.SimulationFailed]: "Simulation failed",
   [OptimisticGovernorErrorCode.TransactionFailed]: "Transaction failed",
   [OptimisticGovernorErrorCode.TransactionTimeout]: "Transaction timed out",

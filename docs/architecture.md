@@ -242,7 +242,8 @@ for the full lifecycle.
 
 - `lock_bond` takes the bond from the proposer, keyed by the proposal's `description_hash`
 - `refund_bond` returns the bond after the governor proposal resolves; `slash` sends it to a recipient instead
-- `update_bond_amount` (admin) changes the required bond; `get_bond` and `get_settings` read the state
+- `update_bond_amount` (admin) changes the required bond; `update_settings` (admin) changes the bond token, governor
+  and refund windows; `set_admin` (admin) hands over the admin role; `get_bond` and `get_settings` read the state
 
 **Depends on:** a SEP-41 bond token, and the governor, whose proposal state decides whether a bond is refunded.
 
@@ -251,6 +252,8 @@ for the full lifecycle.
 - `BondRefunded`: Bond returned to a proposer
 - `BondSlashed`: Bond confiscated
 - `BondAmountUpdated`: Required bond amount changed
+- `SettingsUpdated`: Bond token, governor or refund windows changed
+- `AdminUpdated`: Admin role handed over
 
 #### Optimistic-Governor Contract
 The optimistic proposal track (`contracts/optimistic-governor/`). A proposal passes unless enough objections are
@@ -259,7 +262,10 @@ cast during its challenge window. See [Optimistic Governance](./optimistic-gover
 - `propose` opens a proposal with a challenge window and takes a proposer bond
 - `object` records an objection; an objected proposal is blocked
 - `finalize` settles a proposal that was not blocked, and `execute` calls its target contract
-- `cancel` lets the proposer withdraw before the proposal passes, which refunds the bond; `update_config` (admin) changes the parameters
+- `cancel` lets the proposer withdraw before the proposal passes. It refunds the bond only if the proposal was not
+  objected; an objected proposal's bond stays locked
+- `release_bond` / `slash_bond` (admin, meant to be governance) return an objected proposal's bond to its proposer or
+  send it to a recipient; `update_config` (admin) changes the parameters
 
 **Depends on:** a SEP-41 bond token, the votes token used to read objector weight, and the target contract of each
 proposal it executes.
@@ -271,6 +277,7 @@ proposal it executes.
 - `ProposalPassed`: Challenge window ended without a blocking objection
 - `ProposalExecuted`: Proposal executed on its target
 - `ProposalCancelled`: Proposal withdrawn by its proposer
+- `BondReleased` / `BondSlashed`: An objected proposal's bond returned to its proposer or slashed
 - `ConfigUpdated`: Parameters changed
 
 #### Conviction-Voting Contract
@@ -331,6 +338,7 @@ rules and errors.
 - `create_stream` is governor-only. It sets up the stream and moves no funds
 - `execute_stream` is permissionless and pays every whole interval that has come due
 - `pause_stream`, `resume_stream` and `cancel_stream` are callable by the treasury (the admin) or the stream's creator
+- a stream that has paid its last whole interval is marked `completed` and removed from `get_active_streams`
 
 **Depends on:** a SEP-41 asset that the treasury transfers into the contract. The contract pays from its own balance.
 
@@ -341,6 +349,7 @@ rules and errors.
 - `StrmExec`: Whole intervals paid
 - `StrmPaused` / `StrmResumed`: Stream paused or resumed
 - `StrmCancel`: Stream cancelled
+- `StrmCompleted`: Last whole interval paid; stream removed from the active list
 
 ### Voting-weight sources
 

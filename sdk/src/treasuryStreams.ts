@@ -27,6 +27,7 @@ export enum TreasuryStreamsErrorCode {
   StreamNotDue = 12,
   InsufficientBalance = 13,
   ArithmeticOverflow = 14,
+  StreamCompleted = 15,
   SimulationFailed = 100,
   TransactionFailed = 101,
   TransactionTimeout = 102,
@@ -47,6 +48,7 @@ const TREASURY_STREAMS_MESSAGES: Partial<Record<TreasuryStreamsErrorCode, string
   [TreasuryStreamsErrorCode.StreamNotDue]: "No interval has come due on this stream yet",
   [TreasuryStreamsErrorCode.InsufficientBalance]: "The streams contract does not hold enough of the asset",
   [TreasuryStreamsErrorCode.ArithmeticOverflow]: "Arithmetic overflow in stream accounting",
+  [TreasuryStreamsErrorCode.StreamCompleted]: "Stream has paid its last interval and is finished",
 };
 
 export class TreasuryStreamsError extends Error {
@@ -75,6 +77,8 @@ export interface TreasuryStream {
   totalStreamed: bigint;
   paused: boolean;
   cancelled: boolean;
+  /** Set once the stream has paid its last whole interval; it pays nothing more. */
+  completed: boolean;
   createdBy: string;
 }
 
@@ -105,6 +109,7 @@ export function mapTreasuryStream(raw: any): TreasuryStream {
     totalStreamed: BigInt(raw.total_streamed ?? 0),
     paused: Boolean(raw.paused),
     cancelled: Boolean(raw.cancelled),
+    completed: Boolean(raw.completed),
     createdBy: raw.created_by,
   };
 }

@@ -8,7 +8,15 @@ import {
   TreasuryStrategiesClient,
 } from "@nebgov/sdk";
 import { stubClient } from "./sdkMock";
-import { BASE_CONFIG, contractAddress, runCli, useCleanEnvironment } from "./helpers";
+import {
+  BASE_CONFIG,
+  OTHER_ACCOUNT,
+  SIGNER,
+  contractAddress,
+  runCli,
+  useCleanEnvironment,
+  writeKeypairFile,
+} from "./helpers";
 
 useCleanEnvironment();
 
@@ -64,6 +72,100 @@ describe("proposal-bonds", () => {
     await expect(runCli(["proposal-bonds", "list", "--limit", "many"], config)).rejects.toThrow(
       /limit must be a non-negative integer/,
     );
+  });
+
+  const BOND_TOKEN = contractAddress(44);
+  const NEW_GOVERNOR = contractAddress(45);
+  const settingsArgs = [
+    "--bond-token",
+    BOND_TOKEN,
+    "--governor",
+    NEW_GOVERNOR,
+    "--refund-grace-ledgers",
+    "100",
+    "--max-lock-ledgers",
+    "1000",
+  ];
+
+  it("update-settings: submits the parsed settings with the admin keypair", async () => {
+    const client = stubClient(ProposalBondsClient, {
+      updateSettings: jest.fn().mockResolvedValue("HASH1"),
+    });
+
+    const result = await runCli(
+      ["proposal-bonds", "update-settings", ...settingsArgs, "--keypair", writeKeypairFile()],
+      config,
+    );
+
+    const [signer, settings] = client.updateSettings.mock.calls[0];
+    expect(signer.publicKey()).toBe(SIGNER.publicKey());
+    expect(settings).toEqual({
+      bondToken: BOND_TOKEN,
+      governor: NEW_GOVERNOR,
+      refundGraceLedgers: 100,
+      maxLockLedgers: 1000,
+    });
+    expect(result.json()).toEqual({
+      ok: true,
+      ...settings,
+      admin: SIGNER.publicKey(),
+      hash: "HASH1",
+    });
+  });
+
+  it("update-settings --dry-run prints the plan without submitting", async () => {
+    const client = stubClient(ProposalBondsClient, { updateSettings: jest.fn() });
+
+    const result = await runCli(
+      ["--dry-run", "proposal-bonds", "update-settings", ...settingsArgs, "--keypair", "unused"],
+      config,
+    );
+
+    expect(client.updateSettings).not.toHaveBeenCalled();
+    expect(result.json()).toEqual({
+      action: "proposal-bonds.update-settings",
+      bondToken: BOND_TOKEN,
+      governor: NEW_GOVERNOR,
+      refundGraceLedgers: 100,
+      maxLockLedgers: 1000,
+    });
+  });
+
+  it("update-settings: rejects a max lock that does not exceed the grace window", async () => {
+    const client = stubClient(ProposalBondsClient, { updateSettings: jest.fn() });
+    const args = [...settingsArgs];
+    args[args.indexOf("--max-lock-ledgers") + 1] = "100";
+
+    await expect(
+      runCli(["proposal-bonds", "update-settings", ...args, "--keypair", writeKeypairFile()], config),
+    ).rejects.toThrow("max-lock-ledgers must be greater than refund-grace-ledgers");
+    expect(client.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("set-admin: hands the admin role to the given address", async () => {
+    const client = stubClient(ProposalBondsClient, { setAdmin: jest.fn().mockResolvedValue("HASH2") });
+
+    const result = await runCli(
+      ["proposal-bonds", "set-admin", OTHER_ACCOUNT, "--keypair", writeKeypairFile()],
+      config,
+    );
+
+    const [signer, newAdmin] = client.setAdmin.mock.calls[0];
+    expect(signer.publicKey()).toBe(SIGNER.publicKey());
+    expect(newAdmin).toBe(OTHER_ACCOUNT);
+    expect(result.json()).toEqual({
+      ok: true,
+      admin: SIGNER.publicKey(),
+      newAdmin: OTHER_ACCOUNT,
+      hash: "HASH2",
+    });
+  });
+
+  it("set-admin: validates the new admin address", async () => {
+    stubClient(ProposalBondsClient, { setAdmin: jest.fn() });
+    await expect(
+      runCli(["proposal-bonds", "set-admin", "nobody", "--keypair", writeKeypairFile()], config),
+    ).rejects.toThrow(/new-admin must be a Stellar account/);
   });
 });
 

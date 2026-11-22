@@ -11,9 +11,9 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import toast from "react-hot-toast";
-import { OptimisticGovernorClient, VotesClient } from "@nebgov/sdk";
+import { OptimisticGovernorClient, VotesClient, subscribeToOptimisticObjectionCast } from "@nebgov/sdk";
 import { useWallet } from "../../../lib/wallet-context";
-import { readGovernorConfig } from "../../../lib/nebgov-env";
+import { readGovernorConfig, subscriptionOptsFromConfig } from "../../../lib/nebgov-env";
 import { useOptimisticProposal } from "../../../hooks/useOptimisticProposals";
 import { ChallengeCountdown } from "../../../components/ChallengeCountdown";
 import { useLedgerClock } from "../../../lib/hooks/useLedgerClock";
@@ -60,6 +60,20 @@ export default function OptimisticProposalPage() {
       }
     })();
   }, [publicKey, proposal]);
+
+  // Keep objection totals and the progress indicator current between indexer polls.
+  useEffect(() => {
+    if (!id) return;
+    const config = readGovernorConfig();
+    if (!config?.optimisticGovernorAddress) return;
+    return subscribeToOptimisticObjectionCast(
+      config.optimisticGovernorAddress,
+      (event) => {
+        if (event.proposalId === BigInt(id)) refresh();
+      },
+      subscriptionOptsFromConfig(config),
+    );
+  }, [id, refresh]);
 
   async function handleObject() {
     if (!publicKey || !signTransaction || !proposal) return;

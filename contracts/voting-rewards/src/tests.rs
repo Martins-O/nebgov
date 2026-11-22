@@ -421,6 +421,29 @@ fn zero_participation_epoch_publishes_an_empty_allocation() {
     assert_eq!(published.total_reward_amount, 0);
 }
 
+#[test]
+fn zero_amount_root_cannot_be_overwritten() {
+    let env = Env::default();
+    let f = setup(&env);
+
+    let epoch = f.client.get_epoch(&0).unwrap();
+    advance_to(&env, epoch.end_ledger);
+    let root = BytesN::from_array(&env, &[0u8; 32]);
+    f.client.publish_epoch_root(&f.admin, &0, &root, &0);
+
+    // A second publish, with a different root, is refused and leaves the
+    // first root in place.
+    let other_root = BytesN::from_array(&env, &[9u8; 32]);
+    assert_eq!(
+        f.client
+            .try_publish_epoch_root(&f.admin, &0, &other_root, &0)
+            .unwrap_err()
+            .unwrap(),
+        VotingRewardsError::EpochAlreadyFinalized.into(),
+    );
+    assert_eq!(f.client.get_epoch(&0).unwrap().merkle_root, Some(root));
+}
+
 /// Golden vectors shared with `backend/src/__tests__/voting-rewards-merkle.test.ts`.
 ///
 /// This is the cross-language pin the issue asks for: the leaf encoding, the

@@ -916,6 +916,100 @@ export class VotesClient {
   }
 
   /**
+   * Get the checkpoint retention period in ledgers.
+   */
+  async getCheckpointRetentionPeriod(): Promise<number> {
+    const result = await this.server.simulateTransaction(
+      new TransactionBuilder(await this.server.getAccount(this.readAccount()), {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(this.contract.call("checkpoint_retention_period"))
+        .setTimeout(30)
+        .build(),
+    );
+
+    if (SorobanRpc.Api.isSimulationError(result)) {
+      throw new VotesError(
+        VotesErrorCode.SimulationFailed,
+        "Failed to get checkpoint retention period",
+      );
+    }
+
+    const retval = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+      .result?.retval;
+    if (!retval) {
+      throw new VotesError(
+        VotesErrorCode.SimulationFailed,
+        "Failed to get checkpoint retention period",
+      );
+    }
+    return Number(scValToNative(retval));
+  }
+
+  /**
+   * Set the checkpoint retention period in ledgers (admin only).
+   */
+  async setCheckpointRetentionPeriod(
+    signer: Keypair,
+    ledgers: number,
+  ): Promise<void> {
+    const account = await this.server.getAccount(signer.publicKey());
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "set_checkpoint_retention_period",
+          nativeToScVal(ledgers, { type: "u32" }),
+        ),
+      )
+      .setTimeout(30)
+      .build();
+
+    const prepared = await this.server.prepareTransaction(tx);
+    prepared.sign(signer);
+    const result = await this.server.sendTransaction(prepared);
+    if (result.status === "ERROR") {
+      throw parseVotesError(result);
+    }
+  }
+
+  /**
+   * Prune checkpoints no longer needed by active proposals (admin only).
+   *
+   * @param minActiveProposalLedger - Oldest ledger still needed by an active proposal
+   */
+  async pruneCheckpoints(
+    signer: Keypair,
+    minActiveProposalLedger?: number,
+  ): Promise<void> {
+    const account = await this.server.getAccount(signer.publicKey());
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "prune_checkpoints",
+          minActiveProposalLedger === undefined
+            ? xdr.ScVal.scvVoid()
+            : nativeToScVal(minActiveProposalLedger, { type: "u32" }),
+        ),
+      )
+      .setTimeout(30)
+      .build();
+
+    const prepared = await this.server.prepareTransaction(tx);
+    prepared.sign(signer);
+    const result = await this.server.sendTransaction(prepared);
+    if (result.status === "ERROR") {
+      throw parseVotesError(result);
+    }
+  }
+
+  /**
    * Enable or disable time-weighted voting (admin only).
    */
   async setTimeWeightEnabled(signer: Keypair, enabled: boolean): Promise<void> {

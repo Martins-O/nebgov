@@ -44,6 +44,40 @@ An optimistic proposal moves through these states:
 4. **Executed** — The proposal's actions were executed on-chain
 5. **Cancelled** — Manually cancelled or expired
 
+## Proposer Bond
+
+`initialize` takes a `proposer_bond_amount` and `proposer_bond_token`; `propose` locks that bond from the proposer
+(an amount of `0` disables it). The bond is an anti-spam deposit, so what happens to it depends on whether the
+proposal was objected:
+
+| Path | Bond |
+|---|---|
+| `finalize` after an unobjected challenge window (`Passed`) | Refunded to the proposer |
+| `cancel` while still in `ChallengeWindow` | Refunded to the proposer |
+| Objected (`Objected`, including if the proposer then cancels) | **Stays locked** until governance settles it |
+
+Cancelling an objected proposal is still allowed, so the proposer can withdraw it and re-propose, but it doesn't
+return the bond. Otherwise "propose, get objected, cancel" would cost nothing and the bond wouldn't deter spam.
+
+An objected proposal's bond is settled by the admin, which should be governance (the governor or timelock), so each
+outcome is a governance decision:
+
+- `release_bond(admin, proposal_id)` returns the bond to the proposer, for an objection that wasn't about spam.
+- `slash_bond(admin, proposal_id, recipient)` sends the bond to `recipient`, for example the treasury, as
+  `contracts/proposal-bonds::slash` does.
+
+Both pay out in the token the bond was locked in, even if `update_bond_config` has changed it since. Both fail with
+`BondNotSettleable` before the proposal has been objected, and with `BondNotFound` once there is no bond left to
+settle.
+
+| Code | Error | Meaning |
+|---|---|---|
+| 18 | `BondNotFound` | No bond is held for the proposal: none was taken, or it was already refunded, released or slashed. |
+| 19 | `BondNotSettleable` | The proposal hasn't been objected, so its bond isn't at risk. |
+
+Events: `BondReleased` (`proposal_id` topic; `proposer`, `amount`) and `BondSlashed` (`proposal_id` topic;
+`recipient`, `amount`).
+
 ## Integration with NebGov
 
 ### Single vs. Multi-Track Governance
@@ -137,6 +171,8 @@ Each governance instance can tune:
 **Voting Power Snapshots**: Historical voting power is fixed at proposal creation. An attacker cannot acquire tokens after creating a proposal and then block objections. Mitigation: Snapshot-based validation is built-in.
 
 **Rushed Execution**: A proposer with poor intentions could create a proposal and immediately execute it if the challenge window closes. Mitigation: Governance should use proposal bonds (see [Proposal Bonds](./proposal-bonds.md)) to raise the cost of spam.
+
+**Free Spam via Cancel**: If cancelling an objected proposal refunded its bond, spamming would cost nothing. Mitigation: once a proposal is objected its bond stays locked until governance releases or slashes it (see [Proposer Bond](#proposer-bond)).
 
 **Consensus Breakdown**: If the community fundamentally disagrees on what constitutes "safe," optimistic governance may execute unpopular proposals. Mitigation: Governance should start with formal voting and only use optimistic tracks for truly routine matters.
 

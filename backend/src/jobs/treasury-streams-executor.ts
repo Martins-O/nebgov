@@ -29,6 +29,7 @@ interface RawStream {
   id: number | bigint;
   paused: boolean;
   cancelled: boolean;
+  completed?: boolean;
 }
 
 function networkPassphrase(): string {
@@ -203,6 +204,8 @@ export class TreasuryStreamsExecutor {
 
     const snapshots: StreamSnapshot[] = [];
     for (const raw of await fetchActiveStreams(server, contract)) {
+      // A finished stream has nothing left to pay; don't spend an RPC call on it.
+      if (raw.completed) continue;
       const id = Number(raw.id);
       const claimable = await view(
         server,
@@ -214,6 +217,7 @@ export class TreasuryStreamsExecutor {
         id,
         paused: raw.paused,
         cancelled: raw.cancelled,
+        completed: Boolean(raw.completed),
         claimable: BigInt(claimable as bigint | number | string),
       });
     }

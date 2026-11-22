@@ -74,6 +74,7 @@ pub struct PendingAction {
 
 #[contracttype]
 pub enum DataKey {
+    Deployer,
     Members,
     Threshold,
     Governor,
@@ -100,14 +101,28 @@ pub(crate) fn extend_instance_ttl(env: &Env) {
 
 #[contractimpl]
 impl GuardianCouncilContract {
+    /// Bind the initializer to the deploy transaction before the first call.
+    pub fn __constructor(env: Env, deployer: Address) {
+        env.storage().instance().set(&DataKey::Deployer, &deployer);
+    }
+
     pub fn initialize(
         env: Env,
+        deployer: Address,
         members: Vec<Address>,
         threshold: u32,
         governor: Address,
         action_ttl_ledgers: u32,
     ) {
-        extend_instance_ttl(&env);
+        deployer.require_auth();
+        let expected_deployer: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Deployer)
+            .unwrap_or_else(|| env.panic_with_error(GuardianCouncilError::NotAuthorized));
+        if deployer != expected_deployer {
+            env.panic_with_error(GuardianCouncilError::NotAuthorized);
+        }
         if env.storage().instance().has(&DataKey::Governor) {
             env.panic_with_error(GuardianCouncilError::AlreadyInitialized);
         }

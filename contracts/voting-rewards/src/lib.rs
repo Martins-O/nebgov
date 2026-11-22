@@ -146,6 +146,10 @@ impl VotingRewardsContract {
     /// set can't be final before then) and hasn't been published yet — a
     /// root is write-once, so a published epoch's claimants can never have
     /// the ground moved under them.
+    ///
+    /// Publishing always finalizes the epoch, including with a
+    /// `total_reward_amount` of 0: an epoch nobody voted in is still final,
+    /// and its root must not be replaceable afterwards.
     pub fn publish_epoch_root(
         env: Env,
         admin: Address,
@@ -187,9 +191,7 @@ impl VotingRewardsContract {
 
         epoch.merkle_root = Some(merkle_root.clone());
         epoch.total_reward_amount = total_reward_amount;
-        if total_reward_amount > 0 {
-            epoch.finalized = true;
-        }
+        epoch.finalized = true;
         Self::store_epoch(&env, &epoch);
 
         events::emit_epoch_root_published(&env, epoch_id, &merkle_root, total_reward_amount);

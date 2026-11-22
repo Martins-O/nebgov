@@ -47,6 +47,61 @@ describe("ProposalBondsClient", () => {
     });
   });
 
+  describe("admin methods", () => {
+    function spySubmit(client: ProposalBondsClient): jest.SpyInstance {
+      return jest
+        .spyOn(client as unknown as { submit: () => Promise<unknown> }, "submit")
+        .mockResolvedValue({ hash: "HASH" });
+    }
+
+    it("updateSettings calls update_settings with typed address and u32 args", async () => {
+      const client = makeClient();
+      const submit = spySubmit(client);
+      const admin = Keypair.random();
+      const bondToken = StrKey.encodeContract(Buffer.alloc(32, 2));
+      const governor = StrKey.encodeContract(Buffer.alloc(32, 3));
+
+      const hash = await client.updateSettings(admin, {
+        bondToken,
+        governor,
+        refundGraceLedgers: 100,
+        maxLockLedgers: 1_000,
+      });
+
+      expect(hash).toBe("HASH");
+      const [signer, fnName, ...args] = submit.mock.calls[0] as [Keypair, string, ...xdr.ScVal[]];
+      expect(signer).toBe(admin);
+      expect(fnName).toBe("update_settings");
+      expect(args.map((arg) => arg.switch().name)).toEqual([
+        "scvAddress",
+        "scvAddress",
+        "scvAddress",
+        "scvU32",
+        "scvU32",
+      ]);
+      expect(args.map((arg) => scValToNative(arg))).toEqual([
+        admin.publicKey(),
+        bondToken,
+        governor,
+        100,
+        1_000,
+      ]);
+    });
+
+    it("setAdmin calls set_admin with the current and new admin", async () => {
+      const client = makeClient();
+      const submit = spySubmit(client);
+      const admin = Keypair.random();
+      const newAdmin = Keypair.random().publicKey();
+
+      await client.setAdmin(admin, newAdmin);
+
+      const [, fnName, ...args] = submit.mock.calls[0] as [Keypair, string, ...xdr.ScVal[]];
+      expect(fnName).toBe("set_admin");
+      expect(args.map((arg) => scValToNative(arg))).toEqual([admin.publicKey(), newAdmin]);
+    });
+  });
+
   describe("indexer-backed query methods", () => {
     const originalFetch = global.fetch;
     let mockFetch: jest.Mock;

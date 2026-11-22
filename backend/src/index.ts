@@ -28,6 +28,7 @@ import pinoHttp from "pino-http";
 import swaggerUi from "swagger-ui-express";
 import { generateOpenApiDocument } from "./openapi";
 import { logger } from "./logger";
+import { validateConfig } from "./config";
 
 dotenv.config();
 
@@ -147,6 +148,7 @@ app.use(
 );
 
 async function bootstrap(): Promise<void> {
+  validateConfig();
   await runBackendMigrations();
   app.listen(PORT, () => {
     logger.info({ port: PORT }, "Backend server running");

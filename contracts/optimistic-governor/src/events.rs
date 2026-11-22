@@ -76,3 +76,17 @@ pub fn emit_admin_updated(env: &Env, old_admin: &Address, new_admin: &Address) {
         (old_admin.clone(), new_admin.clone()),
     );
 }
+
+pub fn emit_bond_released(env: &Env, proposal_id: u64, proposer: &Address, amount: i128) {
+    env.events().publish(
+        (Symbol::new(env, "BondReleased"), proposal_id),
+        (proposer.clone(), amount),
+    );
+}
+
+pub fn emit_bond_slashed(env: &Env, proposal_id: u64, recipient: &Address, amount: i128) {
+    env.events().publish(
+        (Symbol::new(env, "BondSlashed"), proposal_id),
+        (recipient.clone(), amount),
+    );
+}

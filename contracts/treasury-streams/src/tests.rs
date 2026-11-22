@@ -2,9 +2,9 @@ extern crate std;
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger as _},
+    testutils::{Address as _, Events as _, Ledger as _},
     token::{StellarAssetClient, TokenClient},
-    Env,
+    Env, Symbol, TryIntoVal,
 };
 
 const AMOUNT_PER_INTERVAL: i128 = 100;
@@ -87,6 +87,7 @@ fn test_create_stream_stores_config_and_indexes_it() {
     assert_eq!(stream.total_streamed, 0);
     assert!(!stream.paused);
     assert!(!stream.cancelled);
+    assert!(!stream.completed);
     assert_eq!(stream.created_by, f.governor);
 
     assert_eq!(
@@ -332,4 +333,166 @@ fn test_active_streams_are_paged_in_creation_order() {
     assert_eq!(page.len(), 1);
     assert_eq!(page.get(0).unwrap().id, second);
     assert_eq!(client.get_active_streams(&5, &10).len(), 0);
+}
+
+// ── #1542: completed streams leave ActiveStreams ────────────────────────────
+
+fn active_ids(client: &TreasuryStreamsContractClient) -> std::vec::Vec<u64> {
+    client
+        .get_active_streams(&0, &100)
+        .iter()
+        .map(|stream| stream.id)
+        .collect()
+}
+
+#[test]
+fn test_paying_the_last_interval_completes_the_stream() {
+    let f = setup();
+    let client = TreasuryStreamsContractClient::new(&f.env, &f.contract_id);
+    let stream_id = create_default_stream(&f);
+
+    // Past end_ledger: all nine whole intervals are paid in one call.
+    f.env.ledger().set_sequence_number(500);
+    client.execute_stream(&stream_id);
+
+    let topic: Symbol = f
+        .env
+        .events()
+        .all()
+        .last()
+        .unwrap()
+        .1
+        .get(0)
+        .unwrap()
+        .try_into_val(&f.env)
+        .unwrap();
+    assert_eq!(topic, Symbol::new(&f.env, STREAM_COMPLETED_TOPIC));
+
+    let stream = client.get_stream(&stream_id);
+    assert!(stream.completed);
+    assert_eq!(stream.last_streamed_ledger, 91);
+    assert_eq!(stream.total_streamed, 9 * AMOUNT_PER_INTERVAL);
+    assert_eq!(recipient_balance(&f), 9 * AMOUNT_PER_INTERVAL);
+    assert_eq!(client.get_claimable_amount(&stream_id), 0);
+    assert!(active_ids(&client).is_empty());
+    // A completed stream stays visible to its recipient.
+    assert_eq!(
+        client
+            .get_streams_for_recipient(&f.recipient, &0, &10)
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn test_partial_payment_keeps_the_stream_active() {
+    let f = setup();
+    let client = TreasuryStreamsContractClient::new(&f.env, &f.contract_id);
+    let stream_id = create_default_stream(&f);
+
+    f.env.ledger().set_sequence_number(25);
+    client.execute_stream(&stream_id);
+
+    assert!(!client.get_stream(&stream_id).completed);
+    assert_eq!(active_ids(&client), std::vec![stream_id]);
+}
+
+#[test]
+fn test_stream_completes_on_the_call_that_pays_its_final_interval() {
+    let f = setup();
+    let client = TreasuryStreamsContractClient::new(&f.env, &f.contract_id);
+    let stream_id = create_default_stream(&f);
+
+    f.env.ledger().set_sequence_number(85);
+    client.execute_stream(&stream_id);
+    assert!(!client.get_stream(&stream_id).completed);
+
+    // The ninth and last interval completes at ledger 91.
+    f.env.ledger().set_sequence_number(91);
+    client.execute_stream(&stream_id);
+    assert!(client.get_stream(&stream_id).completed);
+    assert!(active_ids(&client).is_empty());
+}
+
+#[test]
+fn test_interval_ending_exactly_on_end_ledger_completes_the_stream() {
+    let f = setup();
+    let client = TreasuryStreamsContractClient::new(&f.env, &f.contract_id);
+    // 1 -> 101 is exactly ten 10-ledger intervals.
+    let stream_id = client.create_stream(
+        &f.governor,
+        &f.recipient,
+        &f.asset,
+        &AMOUNT_PER_INTERVAL,
+        &INTERVAL_LEDGERS,
+        &START_LEDGER,
+        &101,
+    );
+
+    f.env.ledger().set_sequence_number(101);
+    client.execute_stream(&stream_id);
+
+    let stream = client.get_stream(&stream_id);
+    assert!(stream.completed);
+    assert_eq!(stream.last_streamed_ledger, 101);
+    assert_eq!(stream.total_streamed, 10 * AMOUNT_PER_INTERVAL);
+}
+
+#[test]
+fn test_completing_one_stream_leaves_the_others_active_in_order() {
+    let f = setup();
+    let client = TreasuryStreamsContractClient::new(&f.env, &f.contract_id);
+    let first = create_default_stream(&f);
+    let short = client.create_stream(
+        &f.governor,
+        &f.recipient,
+        &f.asset,
+        &AMOUNT_PER_INTERVAL,
+        &INTERVAL_LEDGERS,
+        &START_LEDGER,
+        &30,
+    );
+    let third = create_default_stream(&f);
+
+    f.env.ledger().set_sequence_number(30);
+    client.execute_stream(&short);
+
+    assert!(client.get_stream(&short).completed);
+    assert_eq!(active_ids(&client), std::vec![first, third]);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #15)")]
+fn test_execute_rejects_completed_stream() {
+    let f = setup();
+    let client = TreasuryStreamsContractClient::new(&f.env, &f.contract_id);
+    let stream_id = create_default_stream(&f);
+
+    f.env.ledger().set_sequence_number(500);
+    client.execute_stream(&stream_id);
+    client.execute_stream(&stream_id);
+}
+
+#[test]
+fn test_completed_stream_cannot_be_paused_resumed_or_cancelled() {
+    let f = setup();
+    let client = TreasuryStreamsContractClient::new(&f.env, &f.contract_id);
+    let stream_id = create_default_stream(&f);
+
+    f.env.ledger().set_sequence_number(500);
+    client.execute_stream(&stream_id);
+
+    let completed: soroban_sdk::Error = TreasuryStreamsError::StreamCompleted.into();
+    assert_eq!(
+        client.try_pause_stream(&f.treasury, &stream_id),
+        Err(Ok(completed))
+    );
+    assert_eq!(
+        client.try_resume_stream(&f.treasury, &stream_id),
+        Err(Ok(completed))
+    );
+    assert_eq!(
+        client.try_cancel_stream(&f.treasury, &stream_id),
+        Err(Ok(completed))
+    );
 }

@@ -4,6 +4,7 @@ const live = (id: number, claimable: bigint): StreamSnapshot => ({
   id,
   paused: false,
   cancelled: false,
+  completed: false,
   claimable,
 });
 
@@ -14,10 +15,11 @@ describe("selectExecutableStreams", () => {
     expect(due.map((stream) => stream.id)).toEqual([1]);
   });
 
-  it("skips paused and cancelled streams even when money is due", () => {
+  it("skips paused, cancelled and completed streams even when money is due", () => {
     const streams: StreamSnapshot[] = [
-      { id: 1, paused: true, cancelled: false, claimable: 100n },
-      { id: 2, paused: false, cancelled: true, claimable: 100n },
+      { id: 1, paused: true, cancelled: false, completed: false, claimable: 100n },
+      { id: 2, paused: false, cancelled: true, completed: false, claimable: 100n },
+      { id: 3, paused: false, cancelled: false, completed: true, claimable: 100n },
     ];
 
     expect(selectExecutableStreams(streams, new Set())).toEqual([]);

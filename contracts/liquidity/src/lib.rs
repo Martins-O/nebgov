@@ -28,6 +28,18 @@ use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, 
 const MIN_LIQUIDITY: i128 = 1_000;
 const MAX_FEE_BPS: u32 = 1_000;
 const TTL_LEDGERS: u32 = 6_307_200;
+/// Re-extend the instance entry once its remaining TTL drops below this many ledgers.
+pub const INSTANCE_TTL_THRESHOLD: u32 = 100_000;
+/// Number of ledgers the instance entry (governor address) is extended to.
+pub const INSTANCE_EXTEND_TTL: u32 = 300_000;
+
+/// Keep the contract instance (which holds the governor address) alive so the
+/// contract is not archived after a quiet period.
+fn extend_instance_ttl(env: &Env) {
+    env.storage()
+        .instance()
+        .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_EXTEND_TTL);
+}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -102,6 +114,7 @@ pub struct LiquidityContract;
 impl LiquidityContract {
     /// Initialize the contract with the governor that owns privileged actions.
     pub fn initialize(env: Env, governor: Address) {
+        extend_instance_ttl(&env);
         governor.require_auth();
         if env.storage().instance().has(&DataKey::Governor) {
             env.panic_with_error(LiquidityError::AlreadyInitialized);
@@ -111,6 +124,7 @@ impl LiquidityContract {
 
     /// Return the configured governor address.
     pub fn governor(env: Env) -> Address {
+        extend_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&DataKey::Governor)
@@ -126,6 +140,7 @@ impl LiquidityContract {
         token_a: Address,
         token_b: Address,
     ) {
+        extend_instance_ttl(&env);
         caller.require_auth();
         Self::require_governor(&env, &caller);
 
@@ -157,6 +172,7 @@ impl LiquidityContract {
         outcome_b: u32,
         fee_bps: u32,
     ) {
+        extend_instance_ttl(&env);
         caller.require_auth();
         Self::require_governor(&env, &caller);
 
@@ -206,6 +222,7 @@ impl LiquidityContract {
         amount_b: i128,
         min_lp_tokens_out: i128,
     ) -> (i128, i128) {
+        extend_instance_ttl(&env);
         provider.require_auth();
 
         if amount_a <= 0 || amount_b <= 0 {
@@ -317,6 +334,7 @@ impl LiquidityContract {
         outcome_b: u32,
         lp_tokens: i128,
     ) -> (i128, i128) {
+        extend_instance_ttl(&env);
         provider.require_auth();
 
         // Security: validate caller inputs before any state mutation or token transfer.
@@ -413,6 +431,7 @@ impl LiquidityContract {
         amount_in: i128,
         min_amount_out: i128,
     ) -> i128 {
+        extend_instance_ttl(&env);
         trader.require_auth();
 
         if outcome_in == outcome_out {
@@ -501,6 +520,7 @@ impl LiquidityContract {
         outcome_b: u32,
         fee_bps: u32,
     ) {
+        extend_instance_ttl(&env);
         caller.require_auth();
         Self::require_governor(&env, &caller);
 
@@ -523,6 +543,7 @@ impl LiquidityContract {
 
     /// Get the current pool state.
     pub fn get_pool(env: Env, outcome_a: u32, outcome_b: u32) -> Pool {
+        extend_instance_ttl(&env);
         env.storage()
             .persistent()
             .get(&Self::pool_key(outcome_a, outcome_b))
@@ -536,6 +557,7 @@ impl LiquidityContract {
     /// attempting operations like `add_liquidity` or `swap`, which require an
     /// already-initialized pool.
     pub fn get_pool_safe(env: Env, outcome_a: u32, outcome_b: u32) -> Option<Pool> {
+        extend_instance_ttl(&env);
         env.storage()
             .persistent()
             .get(&Self::pool_key(outcome_a, outcome_b))
@@ -543,6 +565,7 @@ impl LiquidityContract {
 
     /// Get immutable metadata recorded when the pool was initialized.
     pub fn get_pool_metadata(env: Env, outcome_a: u32, outcome_b: u32) -> PoolMetadata {
+        extend_instance_ttl(&env);
         env.storage()
             .persistent()
             .get(&Self::pool_metadata_key(outcome_a, outcome_b))
@@ -551,6 +574,7 @@ impl LiquidityContract {
 
     /// Get the LP token balance for a provider in a specific pool.
     pub fn get_lp_position(env: Env, provider: Address, outcome_a: u32, outcome_b: u32) -> i128 {
+        extend_instance_ttl(&env);
         let position: LPPosition = env
             .storage()
             .persistent()
@@ -561,6 +585,7 @@ impl LiquidityContract {
 
     /// Calculate the current pool price as reserve_b / reserve_a scaled by 10_000.
     pub fn get_price(env: Env, outcome_a: u32, outcome_b: u32) -> i128 {
+        extend_instance_ttl(&env);
         let pool = Self::get_pool(env, outcome_a, outcome_b);
         if pool.reserve_a == 0 {
             return 0;
@@ -576,6 +601,7 @@ impl LiquidityContract {
         outcome_out: u32,
         amount_in: i128,
     ) -> (i128, i128) {
+        extend_instance_ttl(&env);
         if outcome_in == outcome_out {
             env.panic_with_error(LiquidityError::SameOutcome);
         }

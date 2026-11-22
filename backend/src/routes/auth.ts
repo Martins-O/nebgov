@@ -5,6 +5,7 @@ import crypto from "crypto";
 import pool from "../db/pool";
 import { validate } from "../middleware/validate";
 import { logger } from "../logger";
+import { requireJwtSecret } from "../config";
 
 const router = Router();
 
@@ -51,7 +52,7 @@ router.post(
       // Generate access token (short-lived)
       const accessToken = jwt.sign(
         { userId, walletAddress },
-        process.env.JWT_SECRET!,
+        requireJwtSecret(),
         { expiresIn: ACCESS_TOKEN_EXPIRY },
       );
 
@@ -137,7 +138,7 @@ router.post("/refresh", async (req, res) => {
         userId: tokenData.user_id,
         walletAddress: (result.rows[0] as any).wallet_address,
       },
-      process.env.JWT_SECRET!,
+      requireJwtSecret(),
       { expiresIn: ACCESS_TOKEN_EXPIRY },
     );
 

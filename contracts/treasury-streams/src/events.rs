@@ -5,6 +5,7 @@ pub const STREAM_EXECUTED_TOPIC: &str = "StrmExec";
 pub const STREAM_PAUSED_TOPIC: &str = "StrmPaused";
 pub const STREAM_RESUMED_TOPIC: &str = "StrmResumed";
 pub const STREAM_CANCELLED_TOPIC: &str = "StrmCancel";
+pub const STREAM_COMPLETED_TOPIC: &str = "StrmCompleted";
 
 #[derive(Clone)]
 #[contracttype]
@@ -26,6 +27,13 @@ pub struct StreamExecutedEvent {
 #[derive(Clone)]
 #[contracttype]
 pub struct StreamCancelledEvent {
+    pub stream_id: u64,
+    pub total_streamed: i128,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct StreamCompletedEvent {
     pub stream_id: u64,
     pub total_streamed: i128,
 }
@@ -73,6 +81,16 @@ pub fn emit_stream_cancelled(env: &Env, stream_id: u64, total_streamed: i128) {
     env.events().publish(
         (Symbol::new(env, STREAM_CANCELLED_TOPIC), stream_id),
         StreamCancelledEvent {
+            stream_id,
+            total_streamed,
+        },
+    );
+}
+
+pub fn emit_stream_completed(env: &Env, stream_id: u64, total_streamed: i128) {
+    env.events().publish(
+        (Symbol::new(env, STREAM_COMPLETED_TOPIC), stream_id),
+        StreamCompletedEvent {
             stream_id,
             total_streamed,
         },

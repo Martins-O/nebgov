@@ -20,7 +20,6 @@ import {
   AlertCircle,
   Copy,
 } from "lucide-react";
-import { Keypair } from "@stellar/stellar-sdk";
 import {
   GovernorClient,
   VotesClient,
@@ -532,13 +531,14 @@ function ProposeWizardInner() {
     if (!clients || !publicKey) return;
     setDelegateBusy(true);
     try {
-      const secret = process.env.NEXT_PUBLIC_DELEGATE_SECRET_KEY;
-      if (!secret)
-        throw new Error(
-          "Missing NEXT_PUBLIC_DELEGATE_SECRET_KEY in .env.local",
-        );
-      const signer = Keypair.fromSecret(secret);
-      const txHash = await clients.votes.delegate(signer, publicKey);
+      if (!signTransaction) {
+        throw new Error("Connect your wallet to sign the delegation.");
+      }
+      const txHash = await clients.votes.delegateWithSign(
+        publicKey,
+        publicKey,
+        signTransaction,
+      );
       toast.success(
         <div>
           Delegated to yourself!{" "}

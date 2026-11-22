@@ -121,8 +121,9 @@ describe("GuardianCouncilClient RPC", () => {
       "revoke_approval",
       "execute_action",
     ]);
-    expect(calls.map((call) => call.args.length)).toEqual([4, 2, 2, 2, 1]);
-    expect(calls[0].args[0].vec()![0].switch().name).toBe("scvAddress");
+    expect(calls.map((call) => call.args.length)).toEqual([5, 2, 2, 2, 1]);
+    expect(scValToNative(calls[0].args[0])).toBe(signer.publicKey());
+    expect(calls[0].args[1].vec()![0].switch().name).toBe("scvAddress");
     expect(scValToNative(calls[2].args[0])).toBe(signer.publicKey());
     expect(scValToNative(calls[4].args[0])).toBe(9n);
   });

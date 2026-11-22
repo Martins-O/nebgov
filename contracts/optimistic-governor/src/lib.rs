@@ -295,7 +295,7 @@ impl OptimisticGovernorContract {
         }
         proposal.state = OptimisticProposalState::Passed;
         Self::save_proposal(&env, &proposal);
-        Self::refund_bond(&env, proposal_id, &proposal.proposer);
+        Self::pay_out_bond(&env, proposal_id, &proposal.proposer);
         events::emit_proposal_passed(&env, proposal_id);
     }
 
@@ -341,11 +341,16 @@ impl OptimisticGovernorContract {
     }
 
     /// The proposer may withdraw their own proposal any time before it has
-    /// passed — including while it is frozen in `Objected`, since this
-    /// issue defines no on-chain appeal path and the proposer may prefer to
-    /// re-propose after addressing the objection instead. Refunds any
-    /// locked bond, mirroring a voluntary withdrawal rather than a slash
-    /// (no slash mechanism is defined in this contract's scope).
+    /// passed, including while it is frozen in `Objected` (for example to
+    /// re-propose after addressing the objection).
+    ///
+    /// The bond follows the state the proposal is cancelled from:
+    /// - from `ChallengeWindow`, nobody has successfully objected yet, so the
+    ///   bond is refunded as a voluntary withdrawal;
+    /// - from `Objected`, the bond stays locked. Cancelling does not get an
+    ///   objected proposer their bond back, or the anti-spam bond would cost
+    ///   nothing. Governance decides its fate with `release_bond` or
+    ///   `slash_bond`.
     pub fn cancel(env: Env, caller: Address, proposal_id: u64) {
         caller.require_auth();
         let mut proposal = Self::must_get_proposal(&env, proposal_id);
@@ -358,10 +363,39 @@ impl OptimisticGovernorContract {
         ) {
             env.panic_with_error(OptimisticGovernorError::ProposalNotCancellable);
         }
+        let was_objected = proposal.state == OptimisticProposalState::Objected;
         proposal.state = OptimisticProposalState::Cancelled;
         Self::save_proposal(&env, &proposal);
-        Self::refund_bond(&env, proposal_id, &proposal.proposer);
+        if !was_objected {
+            Self::pay_out_bond(&env, proposal_id, &proposal.proposer);
+        }
         events::emit_proposal_cancelled(&env, proposal_id, &caller);
+    }
+
+    /// Admin-only (the admin is expected to be governance, e.g. the governor
+    /// or timelock): return an objected proposal's locked bond to its
+    /// proposer, for an objection the community judges was not about spam.
+    ///
+    /// Only callable once the proposal is `Objected`, or `Cancelled` after
+    /// being objected. A bond is never at risk before an objection.
+    pub fn release_bond(env: Env, admin: Address, proposal_id: u64) {
+        Self::require_admin(&env, &admin);
+        let proposal = Self::must_get_settleable_bond(&env, proposal_id);
+        let amount = Self::pay_out_bond(&env, proposal_id, &proposal.proposer);
+        events::emit_bond_released(&env, proposal_id, &proposal.proposer, amount);
+    }
+
+    /// Admin-only (the admin is expected to be governance, e.g. the governor
+    /// or timelock): send an objected proposal's locked bond to `recipient`
+    /// instead of the proposer, mirroring `contracts/proposal-bonds::slash`.
+    ///
+    /// Only callable once the proposal is `Objected`, or `Cancelled` after
+    /// being objected. A bond is never at risk before an objection.
+    pub fn slash_bond(env: Env, admin: Address, proposal_id: u64, recipient: Address) {
+        Self::require_admin(&env, &admin);
+        Self::must_get_settleable_bond(&env, proposal_id);
+        let amount = Self::pay_out_bond(&env, proposal_id, &recipient);
+        events::emit_bond_slashed(&env, proposal_id, &recipient, amount);
     }
 
     pub fn get_proposal(env: Env, proposal_id: u64) -> OptimisticProposal {
@@ -495,31 +529,56 @@ impl OptimisticGovernorContract {
         );
     }
 
-    fn refund_bond(env: &Env, proposal_id: u64, proposer: &Address) {
-        let key = DataKey::Bond(proposal_id);
-        if let Some(amount) = env.storage().persistent().get::<_, i128>(&key) {
-            let token_address = env
-                .storage()
-                .persistent()
-                .get(&DataKey::BondToken(proposal_id))
-                .unwrap_or_else(|| {
-                    env.storage()
-                        .instance()
-                        .get(&DataKey::ProposerBondToken)
-                        .unwrap_or_else(|| {
-                            env.panic_with_error(OptimisticGovernorError::NotInitialized)
-                        })
-                });
-            token::TokenClient::new(env, &token_address).transfer(
-                &env.current_contract_address(),
-                proposer,
-                &amount,
-            );
-            env.storage().persistent().remove(&key);
-            env.storage()
-                .persistent()
-                .remove(&DataKey::BondToken(proposal_id));
+    /// The proposal behind a bond that may be released or slashed: one that
+    /// still holds a bond and was objected. Every path out of
+    /// `ChallengeWindow` other than an objection (`finalize`, or `cancel`
+    /// before any objection) refunds the bond, so a `Cancelled` proposal that
+    /// still holds one was cancelled while `Objected`.
+    fn must_get_settleable_bond(env: &Env, proposal_id: u64) -> OptimisticProposal {
+        let proposal = Self::must_get_proposal(env, proposal_id);
+        if !env.storage().persistent().has(&DataKey::Bond(proposal_id)) {
+            env.panic_with_error(OptimisticGovernorError::BondNotFound);
         }
+        if !matches!(
+            proposal.state,
+            OptimisticProposalState::Objected | OptimisticProposalState::Cancelled
+        ) {
+            env.panic_with_error(OptimisticGovernorError::BondNotSettleable);
+        }
+        proposal
+    }
+
+    /// Transfer a proposal's locked bond, if any, to `to` in the token it was
+    /// locked in, and clear it. Returns the amount paid (0 if none was held).
+    fn pay_out_bond(env: &Env, proposal_id: u64, to: &Address) -> i128 {
+        let key = DataKey::Bond(proposal_id);
+        let Some(amount) = env.storage().persistent().get::<_, i128>(&key) else {
+            return 0;
+        };
+        let token_address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::BondToken(proposal_id))
+            .unwrap_or_else(|| {
+                env.storage()
+                    .instance()
+                    .get(&DataKey::ProposerBondToken)
+                    .unwrap_or_else(|| {
+                        env.panic_with_error(OptimisticGovernorError::NotInitialized)
+                    })
+            });
+        // Clear the bond before the transfer, so a re-entrant token
+        // contract cannot pay the same bond out twice.
+        env.storage().persistent().remove(&key);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::BondToken(proposal_id));
+        token::TokenClient::new(env, &token_address).transfer(
+            &env.current_contract_address(),
+            to,
+            &amount,
+        );
+        amount
     }
 }
 

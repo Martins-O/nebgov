@@ -8,6 +8,7 @@ var mockSendTransaction = jest.fn();
 var mockIsSimulationError = jest.fn();
 var mockGetLatestLedger = jest.fn();
 var mockGetEvents = jest.fn();
+var mockContractCall = jest.fn().mockReturnValue({});
 
 import { VotesClient } from "../votes";
 import { VotesError, VotesErrorCode } from "../errors";
@@ -33,7 +34,7 @@ jest.mock("@stellar/stellar-sdk", () => {
       },
     },
     Contract: jest.fn().mockImplementation((addr) => ({
-      call: jest.fn().mockReturnValue({}),
+      call: mockContractCall,
       address: () => addr,
       contractId: () => addr,
     })),
@@ -129,6 +130,88 @@ describe("VotesClient", () => {
       });
       expect(mockGetAccount).not.toHaveBeenCalled();
       expect(mockSendTransaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("checkpoint retention and pruning", () => {
+    beforeEach(() => {
+      const mockTx = { sign: jest.fn() };
+      mockPrepareTransaction.mockResolvedValue(mockTx);
+      mockSendTransaction.mockResolvedValue({
+        status: "PENDING",
+        hash: "checkpointAdmin123",
+      });
+    });
+
+    it("gets the checkpoint retention period", async () => {
+      mockSimulate.mockResolvedValue({ result: { retval: {} } });
+      mockScValToNative.mockReturnValue(50000);
+
+      await expect(client.getCheckpointRetentionPeriod()).resolves.toBe(50000);
+      expect(mockContractCall).toHaveBeenCalledWith(
+        "checkpoint_retention_period",
+      );
+    });
+
+    it("throws when getting the retention period fails", async () => {
+      mockIsSimulationError.mockReturnValue(true);
+      mockSimulate.mockResolvedValue({ error: "not found" });
+
+      await expect(client.getCheckpointRetentionPeriod()).rejects.toMatchObject({
+        code: VotesErrorCode.SimulationFailed,
+      });
+    });
+
+    it("sets the checkpoint retention period", async () => {
+      await client.setCheckpointRetentionPeriod(mockKeypair, 50000);
+
+      expect(mockNativeToScVal).toHaveBeenCalledWith(50000, { type: "u32" });
+      expect(mockContractCall).toHaveBeenCalledWith(
+        "set_checkpoint_retention_period",
+        {},
+      );
+      expect(mockPrepareTransaction).toHaveBeenCalled();
+      expect(mockSendTransaction).toHaveBeenCalled();
+    });
+
+    it("throws when setting the retention period fails", async () => {
+      mockSendTransaction.mockResolvedValue({
+        status: "ERROR",
+        error: "unauthorized",
+      });
+
+      await expect(
+        client.setCheckpointRetentionPeriod(mockKeypair, 50000),
+      ).rejects.toThrow(VotesError);
+    });
+
+    it("prunes checkpoints without a minimum active proposal ledger", async () => {
+      await client.pruneCheckpoints(mockKeypair);
+
+      expect(mockContractCall).toHaveBeenCalledWith(
+        "prune_checkpoints",
+        xdr.ScVal.scvVoid(),
+      );
+      expect(mockPrepareTransaction).toHaveBeenCalled();
+      expect(mockSendTransaction).toHaveBeenCalled();
+    });
+
+    it("prunes checkpoints while retaining the specified ledger", async () => {
+      await client.pruneCheckpoints(mockKeypair, 1200);
+
+      expect(mockNativeToScVal).toHaveBeenCalledWith(1200, { type: "u32" });
+      expect(mockContractCall).toHaveBeenCalledWith("prune_checkpoints", {});
+    });
+
+    it("throws when pruning fails", async () => {
+      mockSendTransaction.mockResolvedValue({
+        status: "ERROR",
+        error: "unauthorized",
+      });
+
+      await expect(client.pruneCheckpoints(mockKeypair)).rejects.toThrow(
+        VotesError,
+      );
     });
   });
 
